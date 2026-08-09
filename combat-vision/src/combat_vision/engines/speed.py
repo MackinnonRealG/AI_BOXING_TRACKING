@@ -78,12 +78,24 @@ class SpeedEngine(MetricsEngine):
         super().__init__(bus, profile, calibration)
         self._config = config
         self._states: dict[tuple[FighterId, Limb], _WristState] = {}
-        if calibration.is_calibrated:
-            self._start_speed = config.start_speed_mps
-            self._peak_min_speed = config.peak_min_speed_mps
-        else:
-            self._start_speed = config.start_speed_pxps
-            self._peak_min_speed = config.peak_min_speed_pxps
+
+    @property
+    def _start_speed(self) -> float:
+        """Stroke-start threshold in the current calibration's unit.
+
+        Read per call, not cached: live calibration can flip the unit
+        mid-session and thresholds must follow immediately.
+        """
+        if self._calibration.is_calibrated:
+            return self._config.start_speed_mps
+        return self._config.start_speed_pxps
+
+    @property
+    def _peak_min_speed(self) -> float:
+        """Minimum qualifying peak in the current calibration's unit."""
+        if self._calibration.is_calibrated:
+            return self._config.peak_min_speed_mps
+        return self._config.peak_min_speed_pxps
 
     def process(self, tracked: TrackedPose) -> None:
         """Update stroke state for every striking limb of this fighter."""

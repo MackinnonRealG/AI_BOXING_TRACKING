@@ -143,6 +143,9 @@ class UiConfig(BaseModel):
     draw_skeleton: bool = True
     heatmap_alpha: float = 0.35
     window_name: str = "Combat Vision"
+    mirror: bool = True                 # mirror view — natural for solo training
+    min_keypoint_visibility: float = 0.5  # hide keypoints the model can't see
+    toast_duration_s: float = 0.8       # how long strike pop-ups stay on screen
 
 
 class StorageConfig(BaseModel):

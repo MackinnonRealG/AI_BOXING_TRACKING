@@ -46,7 +46,7 @@ def build_pipeline(
     sport: str,
     config: AppConfig,
     frame_sink: FrameSink | None,
-) -> tuple[Pipeline, EventBus]:
+) -> tuple[Pipeline, EventBus, Calibration]:
     """Wire capture→pose→tracking→smoothing→engines→bus for either mode."""
     profile = get_profile(sport)
     bus = EventBus()
@@ -101,4 +101,4 @@ def build_pipeline(
         bus=bus,
         frame_sink=frame_sink,
     )
-    return pipeline, bus
+    return pipeline, bus, calibration

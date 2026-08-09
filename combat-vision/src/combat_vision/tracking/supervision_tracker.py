@@ -55,6 +55,9 @@ class SupervisionTracker:
         self._tracker = sv.ByteTrack(
             lost_track_buffer=max_missed_frames,
             frame_rate=frame_rate,
+            # A track must survive a few frames before earning a fighter
+            # label — stops startup flicker from claiming "A".
+            minimum_consecutive_frames=3,
         )
         self._frame_size = (frame_width_px, frame_height_px)
         self._max_missed_frames = max_missed_frames

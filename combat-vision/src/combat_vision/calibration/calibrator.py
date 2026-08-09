@@ -13,13 +13,17 @@ from dataclasses import dataclass
 from combat_vision.events.types import SpeedUnit
 
 
-@dataclass(frozen=True, slots=True)
+@dataclass(slots=True)
 class Calibration:
     """Holds the pixel→metre scale for one camera, if known.
 
     All engines accept a ``Calibration`` and use :meth:`scale_speed` /
     :meth:`scale_length` so calibrated and uncalibrated sessions flow through
     identical code paths — only the unit of the output changes.
+
+    Mutable on purpose: the live UI's calibration mode calls
+    :meth:`set_scale` mid-session, and every engine holding this object
+    starts producing metric output from that moment on.
     """
 
     metres_per_pixel: float | None
@@ -43,6 +47,10 @@ class Calibration:
             frame_width_px=frame_width_px,
             frame_height_px=frame_height_px,
         )
+
+    def set_scale(self, metres_per_pixel: float | None) -> None:
+        """Set (or clear) the pixel→metre scale at runtime."""
+        self.metres_per_pixel = metres_per_pixel
 
     @property
     def is_calibrated(self) -> bool:

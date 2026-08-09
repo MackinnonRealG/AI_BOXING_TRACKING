@@ -79,6 +79,9 @@ ui:
   draw_skeleton: true
   heatmap_alpha: 0.35
   window_name: "Combat Vision"
+  mirror: true                  # mirror the view (natural for solo training); 'm' toggles
+  min_keypoint_visibility: 0.5  # keypoints below this confidence are not drawn
+  toast_duration_s: 0.8         # strike pop-up duration
 
 storage:
   database_url: "sqlite:///combat_vision.db"

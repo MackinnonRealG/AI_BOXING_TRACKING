@@ -28,7 +28,7 @@ def review_video(
     only the source (file) and sink (report instead of overlay) differ.
     """
     source = VideoFileSource(video_path)
-    pipeline, bus = build_pipeline(source=source, sport=sport, config=config, frame_sink=None)
+    pipeline, bus, _ = build_pipeline(source=source, sport=sport, config=config, frame_sink=None)
     bus.start_recording()
 
     duration_s = pipeline.run()

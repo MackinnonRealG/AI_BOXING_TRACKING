@@ -73,10 +73,14 @@ class PowerEngine(MetricsEngine):
         self._buffers: dict[FighterId, deque[TrackedPose]] = defaultdict(
             lambda: deque(maxlen=_BUFFER_FRAMES)
         )
-        self._speed_ceiling = (
-            config.speed_ceiling_mps if calibration.is_calibrated else config.speed_ceiling_pxps
-        )
         bus.subscribe(SpeedPeakEvent, self._on_candidate)
+
+    @property
+    def _speed_ceiling(self) -> float:
+        """Speed-normalization ceiling in the current calibration's unit."""
+        if self._calibration.is_calibrated:
+            return self._config.speed_ceiling_mps
+        return self._config.speed_ceiling_pxps
 
     def process(self, tracked: TrackedPose) -> None:
         """Buffer poses so stroke windows are available when candidates fire."""

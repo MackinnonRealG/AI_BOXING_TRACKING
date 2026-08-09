@@ -83,12 +83,20 @@ class FootworkEngine(MetricsEngine):
         super().__init__(bus, profile, calibration)
         self._config = config
         self._fighters: dict[FighterId, _FighterFootwork] = {}
-        if calibration.is_calibrated:
-            self._step_min = config.step_min_displacement_m
-            self._plant_speed = config.plant_speed_mps
-        else:
-            self._step_min = config.step_min_displacement_px
-            self._plant_speed = config.plant_speed_pxps
+
+    @property
+    def _step_min(self) -> float:
+        """Step-displacement threshold in the current calibration's unit."""
+        if self._calibration.is_calibrated:
+            return self._config.step_min_displacement_m
+        return self._config.step_min_displacement_px
+
+    @property
+    def _plant_speed(self) -> float:
+        """Plant-speed threshold in the current calibration's unit."""
+        if self._calibration.is_calibrated:
+            return self._config.plant_speed_mps
+        return self._config.plant_speed_pxps
 
     def process(self, tracked: TrackedPose) -> None:
         """Advance step detection, the heat map, and periodic samples."""

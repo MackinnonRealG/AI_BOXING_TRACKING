@@ -28,6 +28,7 @@ def _parser() -> argparse.ArgumentParser:
     live.add_argument("--sport", choices=_SPORTS, help="sport profile (prompted if omitted)")
     live.add_argument("--camera", type=int, default=None, help="webcam index")
     live.add_argument("--rtsp", default=None, help="RTSP/IP stream URL instead of a webcam")
+    live.add_argument("--no-store", action="store_true", help="skip persisting the session")
 
     review = sub.add_parser("review", help="analyse recorded footage into a report")
     review.add_argument("video", help="path to the video file")
@@ -67,15 +68,18 @@ def main() -> None:
 
 
 def _run_live(args: argparse.Namespace, sport: str, config: object) -> None:
-    """Live mode: camera → pipeline → overlay window."""
+    """Live mode: camera → pipeline → HUD; session saved + reported on quit."""
+    from combat_vision.analytics.reports import build_session_report
     from combat_vision.app_builder import build_pipeline
     from combat_vision.capture.rtsp import RtspSource
     from combat_vision.capture.webcam import WebcamSource
+    from combat_vision.storage.repository import SessionRepository
     from combat_vision.tracking import SwitchableTracker
     from combat_vision.ui.overlay import LiveOverlay
     from combat_vision.utils.config import AppConfig
 
     assert isinstance(config, AppConfig)
+    source_name = args.rtsp if args.rtsp else f"webcam:{args.camera or config.capture.camera_index}"
     source = (
         RtspSource(args.rtsp)
         if args.rtsp
@@ -85,20 +89,48 @@ def _run_live(args: argparse.Namespace, sport: str, config: object) -> None:
             height=config.capture.frame_height,
         )
     )
-    # Build the pipeline first, then bind the overlay to its bus.
-    pipeline, bus = build_pipeline(source=source, sport=sport, config=config, frame_sink=None)
+    # Build the pipeline first, then bind the HUD to its bus and calibration.
+    pipeline, bus, calibration = build_pipeline(
+        source=source, sport=sport, config=config, frame_sink=None
+    )
+    bus.start_recording()
     tracker = pipeline.tracker
     overlay = LiveOverlay(
-        bus, config.ui, tracker=tracker if isinstance(tracker, SwitchableTracker) else None
+        bus,
+        config.ui,
+        tracker=tracker if isinstance(tracker, SwitchableTracker) else None,
+        calibration=calibration,
+        sport=sport,
     )
     pipeline.set_frame_sink(overlay.render)
-    logger.info(
-        "live mode started sport=%s (q quits, h heatmap, t tracker toggle)", sport
-    )
+    logger.info("live mode started sport=%s — controls are shown on screen", sport)
+    duration_s = 0.0
     try:
-        pipeline.run()
+        duration_s = pipeline.run()
     finally:
         overlay.close()
+
+    report = build_session_report(
+        sport=sport, source=source_name, duration_s=duration_s, events=bus.history
+    )
+    print(report.to_text())
+
+    if not args.no_store and bus.history:
+        repo = SessionRepository(config.storage.database_url)
+        session_id = repo.create_session(
+            sport=sport, mode="live", source=source_name, calibrated=calibration.is_calibrated
+        )
+        repo.save_events(session_id, bus.history)
+        for number, start_s, end_s in overlay.rounds:
+            repo.create_round(session_id, number=number, start_s=start_s, end_s=end_s)
+        repo.finish_session(session_id, duration_s)
+        logger.info(
+            "session %d saved: %d events, %d rounds — label round outcomes to "
+            "unlock pattern recognition",
+            session_id,
+            len(bus.history),
+            len(overlay.rounds),
+        )
 
 
 def _run_review(args: argparse.Namespace, sport: str, config: object) -> None:
