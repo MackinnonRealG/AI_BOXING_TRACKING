@@ -25,16 +25,27 @@ class WebcamSource(CameraSource):
             raise RuntimeError(f"cannot open webcam index {index}")
         self._cap.set(cv2.CAP_PROP_FRAME_WIDTH, width)
         self._cap.set(cv2.CAP_PROP_FRAME_HEIGHT, height)
+        self._size = (width, height)
         self._camera_id = camera_id
 
     def frames(self) -> Iterator[TimestampedFrame]:
-        """Yield frames stamped with a monotonic clock relative to start."""
+        """Yield frames stamped with a monotonic clock relative to start.
+
+        Some cameras (notably macOS FaceTime cameras) ignore the requested
+        capture size and deliver native-resolution frames; those are scaled
+        down here so pose inference always runs at the configured size —
+        processing 1080p instead of 720p roughly halves the frame rate.
+        """
         start = time.monotonic()
         index = 0
         while self._cap.isOpened():
             ok, image = self._cap.read()
             if not ok:
                 break
+            if image.shape[1] > self._size[0]:
+                scale = self._size[0] / image.shape[1]  # fit width, keep aspect
+                new_size = (self._size[0], round(image.shape[0] * scale))
+                image = cv2.resize(image, new_size, interpolation=cv2.INTER_AREA)
             yield TimestampedFrame(
                 image=image,
                 timestamp_s=time.monotonic() - start,
