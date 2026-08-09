@@ -19,7 +19,7 @@ from combat_vision.events.bus import EventBus
 from combat_vision.events.types import TrackedPose
 from combat_vision.filtering.smoother import PoseSmoother
 from combat_vision.pose.base import PoseBackend
-from combat_vision.tracking.tracker import FighterTracker
+from combat_vision.tracking.base import Tracker
 
 logger = logging.getLogger(__name__)
 
@@ -34,7 +34,7 @@ class Pipeline:
         self,
         source: CameraSource,
         pose_backend: PoseBackend,
-        tracker: FighterTracker,
+        tracker: Tracker,
         smoother: PoseSmoother,
         engines: Sequence[MetricsEngine],
         bus: EventBus,
@@ -47,6 +47,11 @@ class Pipeline:
         self._engines = engines
         self._bus = bus
         self._frame_sink = frame_sink
+
+    @property
+    def tracker(self) -> Tracker:
+        """The tracker in use (a SwitchableTracker in the default wiring)."""
+        return self._tracker
 
     def set_frame_sink(self, sink: FrameSink) -> None:
         """Attach/replace the per-frame sink (used when the sink — e.g. the

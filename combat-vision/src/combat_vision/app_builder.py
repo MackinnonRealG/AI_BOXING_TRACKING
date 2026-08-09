@@ -23,7 +23,7 @@ from combat_vision.pose.base import PoseBackend
 from combat_vision.pose.mediapipe_backend import MediaPipePoseBackend
 from combat_vision.pose.yolo_backend import YoloV8PoseBackend
 from combat_vision.sports import get_profile
-from combat_vision.tracking.tracker import FighterTracker
+from combat_vision.tracking import FighterTracker, SupervisionTracker, SwitchableTracker
 from combat_vision.utils.config import AppConfig
 
 
@@ -70,10 +70,22 @@ def build_pipeline(
         CombinationEngine(bus, profile, calibration, config.engines.combination),
     ]
 
-    tracker = FighterTracker(
-        max_match_distance=config.tracking.max_match_distance,
-        max_missed_frames=config.tracking.max_missed_frames,
-        max_fighters=config.tracking.max_fighters,
+    # Both trackers are always built; SwitchableTracker lets the live UI
+    # (the 't' key) flip between them without restarting the pipeline.
+    tracker = SwitchableTracker(
+        primary=SupervisionTracker(
+            frame_width_px=config.capture.frame_width,
+            frame_height_px=config.capture.frame_height,
+            max_fighters=config.tracking.max_fighters,
+            max_missed_frames=config.tracking.max_missed_frames,
+            frame_rate=config.capture.target_fps,
+        ),
+        fallback=FighterTracker(
+            max_match_distance=config.tracking.max_match_distance,
+            max_missed_frames=config.tracking.max_missed_frames,
+            max_fighters=config.tracking.max_fighters,
+        ),
+        use_primary=config.tracking.backend == "supervision",
     )
     smoother = PoseSmoother(
         min_cutoff=config.filtering.min_cutoff,

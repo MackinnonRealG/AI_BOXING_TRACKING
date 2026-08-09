@@ -23,6 +23,7 @@ from combat_vision.events.types import (
     StrikeEvent,
     TrackedPose,
 )
+from combat_vision.tracking import SwitchableTracker
 from combat_vision.utils.config import UiConfig
 
 _FIGHTER_COLORS: dict[str, tuple[int, int, int]] = {
@@ -38,11 +39,15 @@ _FEET = (KeypointName.LEFT_ANKLE, KeypointName.RIGHT_ANKLE)
 class LiveOverlay:
     """Draws the live view and owns per-session display state.
 
-    Keys: ``h`` toggles the foot-placement heat map, ``q`` quits.
+    Keys: ``h`` toggles the foot-placement heat map, ``t`` toggles the
+    tracker backend (supervision/ByteTrack ↔ centroid), ``q`` quits.
     """
 
-    def __init__(self, bus: EventBus, config: UiConfig) -> None:
+    def __init__(
+        self, bus: EventBus, config: UiConfig, tracker: SwitchableTracker | None = None
+    ) -> None:
         self._config = config
+        self._tracker = tracker
         self._show_heatmap = False
         self._last_speed: dict[str, SpeedPeakEvent] = {}
         self._last_strike: dict[str, StrikeEvent] = {}
@@ -91,6 +96,8 @@ class LiveOverlay:
             return False
         if key == ord("h"):
             self._show_heatmap = not self._show_heatmap
+        if key == ord("t") and self._tracker is not None:
+            self._tracker.toggle()
         return True
 
     def close(self) -> None:
@@ -121,7 +128,10 @@ class LiveOverlay:
             )
 
     def _draw_stat_panel(self, image: np.ndarray) -> None:
-        lines = ["[h] heatmap  [q] quit"]
+        header = "[h] heatmap  [q] quit"
+        if self._tracker is not None:
+            header = f"[h] heatmap  [t] tracker: {self._tracker.active_name}  [q] quit"
+        lines = [header]
         for fighter_id in sorted(set(self._candidate_counts) | set(self._last_speed)):
             last = self._last_speed.get(fighter_id)
             speed_text = f"{last.peak_speed:.1f} {last.unit}" if last else "—"

@@ -71,6 +71,7 @@ def _run_live(args: argparse.Namespace, sport: str, config: object) -> None:
     from combat_vision.app_builder import build_pipeline
     from combat_vision.capture.rtsp import RtspSource
     from combat_vision.capture.webcam import WebcamSource
+    from combat_vision.tracking import SwitchableTracker
     from combat_vision.ui.overlay import LiveOverlay
     from combat_vision.utils.config import AppConfig
 
@@ -86,9 +87,14 @@ def _run_live(args: argparse.Namespace, sport: str, config: object) -> None:
     )
     # Build the pipeline first, then bind the overlay to its bus.
     pipeline, bus = build_pipeline(source=source, sport=sport, config=config, frame_sink=None)
-    overlay = LiveOverlay(bus, config.ui)
+    tracker = pipeline.tracker
+    overlay = LiveOverlay(
+        bus, config.ui, tracker=tracker if isinstance(tracker, SwitchableTracker) else None
+    )
     pipeline.set_frame_sink(overlay.render)
-    logger.info("live mode started sport=%s (q quits, h toggles heatmap)", sport)
+    logger.info(
+        "live mode started sport=%s (q quits, h heatmap, t tracker toggle)", sport
+    )
     try:
         pipeline.run()
     finally:

@@ -34,6 +34,8 @@ class _Track:
 class FighterTracker:
     """Assigns persistent fighter identities to per-frame detections."""
 
+    name = "centroid"
+
     def __init__(
         self,
         max_match_distance: float,

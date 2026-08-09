@@ -16,6 +16,7 @@ pose:
   min_tracking_confidence: 0.5
 
 tracking:
+  backend: supervision        # supervision (ByteTrack) | centroid — 't' key toggles live
   max_match_distance: 0.25    # normalized image units; greedy centroid gate
   max_missed_frames: 15       # occlusion tolerance before a track is retired
   max_fighters: 2

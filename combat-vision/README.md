@@ -19,7 +19,9 @@ The MediaPipe pose model (`pose_landmarker_lite.task`, ~5 MB) is downloaded auto
 ## Running
 
 ```bash
-# Live mode: webcam + real-time overlay (q quits, h toggles the foot heat map)
+# Live mode: webcam + real-time overlay
+# keys: q quits, h toggles the foot heat map, t toggles the tracker backend
+# (supervision/ByteTrack <-> built-in centroid; also settable via tracking.backend in config)
 combat-vision live --sport boxing --camera 0
 combat-vision live --sport kickboxing --rtsp rtsp://192.168.1.20/stream
 
@@ -57,7 +59,7 @@ Design rules that keep the system extensible:
 |---|---|---|
 | `capture/` | ✅ | `CameraSource` interface; webcam, video file, RTSP; multi-camera-ready frames |
 | `pose/` | ✅ mediapipe / ✅ yolov8 (optional extra) | Pose backends behind one interface; YOLOv8 needs `pip install "combat-vision[yolo]"` |
-| `tracking/` | ✅ v1 | Greedy centroid tracker, occlusion tolerance, stable A/B identities |
+| `tracking/` | ✅ | ByteTrack (supervision) by default with live-toggleable centroid fallback; stable A/B identities through occlusion |
 | `filtering/` | ✅ | One-Euro filter per keypoint (speed-adaptive smoothing) |
 | `sports/` | ✅ | Boxing + kickboxing profiles |
 | `engines/speed` | ✅ tested | Limb velocity (wrists; +ankles/knees in kickboxing), hysteresis stroke detection → candidates |

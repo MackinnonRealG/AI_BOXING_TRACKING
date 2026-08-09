@@ -33,6 +33,7 @@ class PoseConfig(BaseModel):
 class TrackingConfig(BaseModel):
     """Identity-assignment tunables."""
 
+    backend: str = "supervision"  # supervision (ByteTrack) | centroid; 't' toggles live
     max_match_distance: float = 0.25
     max_missed_frames: int = 15
     max_fighters: int = 2
