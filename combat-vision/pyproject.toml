@@ -18,6 +18,7 @@ dependencies = [
     "alembic>=1.13",
     "fastapi>=0.111",
     "uvicorn>=0.30",
+    "supervision>=0.30",
 ]
 
 [project.optional-dependencies]
@@ -59,5 +60,5 @@ disallow_untyped_defs = true
 no_implicit_optional = true
 
 [[tool.mypy.overrides]]
-module = ["cv2.*", "mediapipe.*", "ultralytics.*"]
+module = ["cv2.*", "mediapipe.*", "ultralytics.*", "supervision.*"]
 ignore_missing_imports = true
