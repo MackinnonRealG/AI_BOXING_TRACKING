@@ -21,19 +21,26 @@ def review_video(
     config: AppConfig,
     output_json: str | Path | None = None,
     repo: SessionRepository | None = None,
+    names: dict[str, str] | None = None,
 ) -> SessionReport:
     """Analyse a recorded video and return (and optionally persist) a report.
 
     Uses the same :class:`~combat_vision.pipeline.Pipeline` as live mode —
     only the source (file) and sink (report instead of overlay) differ.
+    ``names`` maps fighter labels ("A"/"B") to display names.
     """
+    names = names or {}
     source = VideoFileSource(video_path)
     pipeline, bus, _ = build_pipeline(source=source, sport=sport, config=config, frame_sink=None)
     bus.start_recording()
 
     duration_s = pipeline.run()
     report = build_session_report(
-        sport=sport, source=str(video_path), duration_s=duration_s, events=bus.history
+        sport=sport,
+        source=str(video_path),
+        duration_s=duration_s,
+        events=bus.history,
+        names=names,
     )
 
     if repo is not None:
@@ -41,6 +48,9 @@ def review_video(
             sport=sport, mode="review", source=str(video_path), calibrated=False
         )
         repo.save_events(session_id, bus.history)
+        for label in sorted({e.fighter_id for e in bus.history}):
+            fighter_db_id = repo.get_or_create_fighter(names.get(label, f"Fighter {label}"))
+            repo.link_fighter(session_id, fighter_db_id, label)
         repo.finish_session(session_id, duration_s)
         logger.info("session %d persisted with %d events", session_id, len(bus.history))
 

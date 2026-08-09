@@ -28,6 +28,7 @@ class FighterSummary:
     """Per-fighter numbers for one session."""
 
     fighter_id: str
+    name: str | None
     punch_candidates: int
     strikes_by_type: dict[str, int]
     landed: int | None
@@ -66,7 +67,7 @@ class SessionReport:
             "",
         ]
         for f in self.fighters:
-            lines.append(f"Fighter {f.fighter_id}")
+            lines.append(f.name or f"Fighter {f.fighter_id}")
             lines.append(f"  Punch candidates: {f.punch_candidates}")
             if f.avg_peak_speed is not None:
                 lines.append(
@@ -99,15 +100,20 @@ class SessionReport:
 
 
 def build_session_report(
-    sport: str, source: str, duration_s: float, events: Sequence[Event]
+    sport: str,
+    source: str,
+    duration_s: float,
+    events: Sequence[Event],
+    names: dict[str, str] | None = None,
 ) -> SessionReport:
     """Aggregate a session's event stream into a report.
 
-    Works with whatever engines were active: sections whose engines are still
-    stubs simply come out zero/None rather than failing.
+    ``names`` maps fighter labels ("A"/"B") to display names. Sections whose
+    engines produced no events simply come out zero/None rather than failing.
     """
+    names = names or {}
     fighter_ids = sorted({e.fighter_id for e in events})
-    summaries = [_summarize(fid, events) for fid in fighter_ids]
+    summaries = [_summarize(fid, events, names.get(fid)) for fid in fighter_ids]
     distances = [e for e in events if isinstance(e, DistanceSample)]
     return SessionReport(
         sport=sport,
@@ -122,7 +128,9 @@ def build_session_report(
     )
 
 
-def _summarize(fighter_id: str, events: Sequence[Event]) -> FighterSummary:
+def _summarize(
+    fighter_id: str, events: Sequence[Event], name: str | None = None
+) -> FighterSummary:
     """Build one fighter's summary from the mixed event stream."""
     mine = [e for e in events if e.fighter_id == fighter_id]
     candidates = [e for e in mine if isinstance(e, SpeedPeakEvent)]
@@ -145,6 +153,7 @@ def _summarize(fighter_id: str, events: Sequence[Event]) -> FighterSummary:
     )
     return FighterSummary(
         fighter_id=fighter_id,
+        name=name,
         punch_candidates=len(candidates),
         strikes_by_type=dict(Counter(s.strike_type.value for s in strikes)),
         landed=landed,
@@ -165,24 +174,25 @@ def _coaching_notes(summaries: Sequence[FighterSummary], duration_s: float) -> l
     notes: list[str] = []
     minutes = max(duration_s / 60.0, 1e-6)
     for f in summaries:
+        who = f.name or f"Fighter {f.fighter_id}"
         rate = f.punch_candidates / minutes
         if f.punch_candidates == 0:
-            notes.append(f"Fighter {f.fighter_id}: no punch candidates detected — check "
+            notes.append(f"{who}: no punch candidates detected — check "
                          "framing/calibration or activity level.")
             continue
         if rate < 10:
             notes.append(
-                f"Fighter {f.fighter_id}: low output ({rate:.0f} punches/min) — "
+                f"{who}: low output ({rate:.0f} punches/min) — "
                 "consider higher work rate in sparring."
             )
         if f.avg_peak_speed and f.max_peak_speed and f.max_peak_speed > 1.5 * f.avg_peak_speed:
             notes.append(
-                f"Fighter {f.fighter_id}: big gap between average and best hand speed — "
+                f"{who}: big gap between average and best hand speed — "
                 "focus on consistent snap, not occasional bursts."
             )
         if f.accuracy is not None and f.accuracy < 0.3:
             notes.append(
-                f"Fighter {f.fighter_id}: connect rate {f.accuracy:.0%} — work distance "
+                f"{who}: connect rate {f.accuracy:.0%} — work distance "
                 "management and setups before volume."
             )
     return notes

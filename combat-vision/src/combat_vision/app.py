@@ -29,13 +29,37 @@ def _parser() -> argparse.ArgumentParser:
     live.add_argument("--camera", type=int, default=None, help="webcam index")
     live.add_argument("--rtsp", default=None, help="RTSP/IP stream URL instead of a webcam")
     live.add_argument("--no-store", action="store_true", help="skip persisting the session")
+    live.add_argument("--name-a", default=None, help="fighter A's name (shown on screen, saved)")
+    live.add_argument("--name-b", default=None, help="fighter B's name (shown on screen, saved)")
 
     review = sub.add_parser("review", help="analyse recorded footage into a report")
     review.add_argument("video", help="path to the video file")
     review.add_argument("--sport", choices=_SPORTS, help="sport profile (prompted if omitted)")
     review.add_argument("--output", default=None, help="write the JSON report here")
     review.add_argument("--no-store", action="store_true", help="skip persisting the session")
+    review.add_argument("--name-a", default=None, help="fighter A's name (used in report, saved)")
+    review.add_argument("--name-b", default=None, help="fighter B's name (used in report, saved)")
     return parser
+
+
+def _fighter_names(args: argparse.Namespace) -> dict[str, str]:
+    """Label -> display-name mapping from CLI flags; interactive fallback.
+
+    With no flags given, live mode asks once at startup (enter to skip).
+    """
+    names: dict[str, str] = {}
+    if args.name_a:
+        names["A"] = args.name_a
+    if args.name_b:
+        names["B"] = args.name_b
+    if not names and args.mode == "live" and sys.stdin.isatty():
+        entered = input("Fighter A's name (enter to skip): ").strip()
+        if entered:
+            names["A"] = entered
+        entered = input("Fighter B's name (enter to skip): ").strip()
+        if entered:
+            names["B"] = entered
+    return names
 
 
 def _select_sport(current: str | None) -> str:
@@ -79,6 +103,7 @@ def _run_live(args: argparse.Namespace, sport: str, config: object) -> None:
     from combat_vision.utils.config import AppConfig
 
     assert isinstance(config, AppConfig)
+    names = _fighter_names(args)
     source_name = args.rtsp if args.rtsp else f"webcam:{args.camera or config.capture.camera_index}"
     source = (
         RtspSource(args.rtsp)
@@ -101,6 +126,7 @@ def _run_live(args: argparse.Namespace, sport: str, config: object) -> None:
         tracker=tracker if isinstance(tracker, SwitchableTracker) else None,
         calibration=calibration,
         sport=sport,
+        names=names,
     )
     pipeline.set_frame_sink(overlay.render)
     logger.info("live mode started sport=%s — controls are shown on screen", sport)
@@ -111,7 +137,7 @@ def _run_live(args: argparse.Namespace, sport: str, config: object) -> None:
         overlay.close()
 
     report = build_session_report(
-        sport=sport, source=source_name, duration_s=duration_s, events=bus.history
+        sport=sport, source=source_name, duration_s=duration_s, events=bus.history, names=names
     )
     print(report.to_text())
 
@@ -121,6 +147,9 @@ def _run_live(args: argparse.Namespace, sport: str, config: object) -> None:
             sport=sport, mode="live", source=source_name, calibrated=calibration.is_calibrated
         )
         repo.save_events(session_id, bus.history)
+        for label in sorted({e.fighter_id for e in bus.history}):
+            fighter_db_id = repo.get_or_create_fighter(names.get(label, f"Fighter {label}"))
+            repo.link_fighter(session_id, fighter_db_id, label)
         for number, start_s, end_s in overlay.rounds:
             repo.create_round(session_id, number=number, start_s=start_s, end_s=end_s)
         repo.finish_session(session_id, duration_s)
@@ -147,6 +176,7 @@ def _run_review(args: argparse.Namespace, sport: str, config: object) -> None:
         config=config,
         output_json=args.output,
         repo=repo,
+        names=_fighter_names(args),
     )
     print(report.to_text())
 

@@ -82,11 +82,13 @@ class LiveOverlay:
         tracker: SwitchableTracker | None = None,
         calibration: Calibration | None = None,
         sport: str = "",
+        names: dict[str, str] | None = None,
     ) -> None:
         self._config = config
         self._tracker = tracker
         self._calibration = calibration
         self._sport = sport
+        self._names = names or {}
 
         self._show_heatmap = False
         self._mirror = config.mirror
@@ -115,6 +117,10 @@ class LiveOverlay:
         bus.subscribe(PowerEstimateEvent, self._on_power)
         bus.subscribe(StanceSample, self._on_stance)
         bus.subscribe(StepEvent, self._on_step)
+
+    def _display_name(self, fighter_id: str) -> str:
+        """The fighter's given name, or 'Fighter <label>' when unnamed."""
+        return self._names.get(fighter_id, f"Fighter {fighter_id}")
 
     # -- event intake ------------------------------------------------------
 
@@ -351,7 +357,7 @@ class LiveOverlay:
             top = hud.strike_counts.most_common(3)
             counts_line = "  ".join(f"{name} x{count}" for name, count in top) or "no strikes yet"
             lines = [
-                f"FIGHTER {fighter_id}   stance: {hud.stance}",
+                f"{self._display_name(fighter_id).upper()} ({fighter_id})   stance: {hud.stance}",
                 last_line,
                 f"punches: {hud.candidates}   steps: {hud.steps}",
                 counts_line,
@@ -401,7 +407,7 @@ class LiveOverlay:
         if nose is not None:
             cv2.putText(
                 image,
-                f"Fighter {tracked.fighter_id}",
+                self._display_name(tracked.fighter_id),
                 (nose[0] - 40, nose[1] - 30),
                 _FONT,
                 0.7,

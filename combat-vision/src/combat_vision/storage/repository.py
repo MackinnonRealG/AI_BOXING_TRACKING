@@ -10,7 +10,14 @@ from sqlalchemy.orm import Session as OrmSession
 from sqlalchemy.orm import sessionmaker
 
 from combat_vision.events.types import Event
-from combat_vision.storage.models import Base, EventRecord, Fighter, Round, Session
+from combat_vision.storage.models import (
+    Base,
+    EventRecord,
+    Fighter,
+    Round,
+    Session,
+    SessionFighter,
+)
 
 
 class SessionRepository:
@@ -75,6 +82,11 @@ class SessionRepository:
             if event_type is not None:
                 query = query.where(EventRecord.event_type == event_type)
             return list(db.scalars(query.order_by(EventRecord.timestamp_s)))
+
+    def link_fighter(self, session_id: int, fighter_id: int, label: str) -> None:
+        """Bind a named fighter to a session under their per-session label."""
+        with self._sessions.begin() as db:
+            db.add(SessionFighter(session_id=session_id, fighter_id=fighter_id, label=label))
 
     def create_round(
         self,
