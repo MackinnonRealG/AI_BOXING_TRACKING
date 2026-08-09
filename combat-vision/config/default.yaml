@@ -1,0 +1,83 @@
+# Combat Vision — all tunables live here. No magic numbers in code.
+
+app:
+  log_level: INFO
+
+capture:
+  camera_index: 0
+  frame_width: 1280
+  frame_height: 720
+  target_fps: 30
+
+pose:
+  backend: mediapipe          # mediapipe | yolov8 (yolov8 is a stub for now)
+  model_variant: lite         # lite (fastest) | full | heavy (most accurate)
+  min_detection_confidence: 0.5
+  min_tracking_confidence: 0.5
+
+tracking:
+  max_match_distance: 0.25    # normalized image units; greedy centroid gate
+  max_missed_frames: 15       # occlusion tolerance before a track is retired
+  max_fighters: 2
+
+filtering:                    # One-Euro filter per keypoint coordinate
+  min_cutoff: 1.0             # Hz — lower = smoother at rest, more lag
+  beta: 0.007                 # speed coefficient — higher = less lag on fast motion
+  d_cutoff: 1.0               # Hz — cutoff for the derivative estimate
+
+calibration:
+  reference_length_m: null    # e.g. 6.1 for a 20ft ring rope span
+  reference_length_px: null   # measured pixel length of the same reference
+
+engines:
+  speed:
+    smoothing_window: 5       # frames of moving-average applied to wrist speed
+    start_speed_mps: 3.0      # stroke begins above this (calibrated)
+    peak_min_speed_mps: 4.5   # stroke must peak above this to count as a punch
+    start_speed_pxps: 900     # uncalibrated fallbacks of the same thresholds
+    peak_min_speed_pxps: 1400
+    end_speed_ratio: 0.4      # stroke ends when speed drops below ratio * peak
+    min_event_interval_s: 0.20
+    max_event_duration_s: 0.60
+  power:
+    speed_weight: 0.5         # component weights for the estimated power score
+    extension_weight: 0.25
+    rotation_weight: 0.25
+    speed_ceiling_mps: 12.0   # hand speed mapping to a full speed component
+    speed_ceiling_pxps: 4000
+    rotation_ceiling_dps: 600 # shoulder-line angular speed ceiling (deg/s)
+  strike_classifier:
+    min_confidence: 0.6
+    straight_elbow_min_deg: 150   # elbow at extension straighter than this -> jab/cross
+    hook_elbow_max_deg: 130       # bent-arm ceiling for hooks
+    uppercut_vertical_ratio: 1.2  # vertical rise must dominate horizontal by this ratio
+    path_curve_ratio: 1.25        # curved wrist path (path/straight) above this -> arc
+    side_kick_rotation_deg: 45    # torso rotation separating side kick from front kick
+    landed_max_distance_m: 0.35   # strike endpoint within this of a target zone = landed
+    landed_max_distance_px: 120
+    opponent_max_age_s: 0.5
+  footwork:
+    step_min_displacement_m: 0.08
+    step_min_displacement_px: 40
+    plant_speed_mps: 0.6          # foot slower than this counts as planted
+    plant_speed_pxps: 200
+    plant_frames: 3
+    sample_interval_s: 0.2
+    heatmap_bins: [48, 27]
+  stance:
+    switch_debounce_s: 0.5
+    square_width_ratio: 0.5       # ankle x-sep under ratio * shoulder width = square
+  distance:
+    sample_interval_s: 0.2
+    max_pose_age_s: 0.15
+  combination:
+    max_gap_s: 1.0            # strikes closer than this chain into a combo
+    min_length: 2
+
+ui:
+  draw_skeleton: true
+  heatmap_alpha: 0.35
+  window_name: "Combat Vision"
+
+storage:
+  database_url: "sqlite:///combat_vision.db"
