@@ -100,6 +100,10 @@ class FighterTracker:
             )
         return results
 
+    def consume_relabeled(self) -> frozenset[FighterId]:
+        """Never recycles a label to a different track — always empty."""
+        return frozenset()
+
 
 def _distance(a: tuple[float, float], b: tuple[float, float]) -> float:
     """Euclidean distance in normalized image coordinates."""

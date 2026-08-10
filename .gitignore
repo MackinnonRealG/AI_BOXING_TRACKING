@@ -9,3 +9,5 @@ combat_vision.db
 .claude/
 .DS_Store
 graphify-out/
+.claude-flow/
+.swarm/

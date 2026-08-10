@@ -74,6 +74,42 @@ def test_identity_survives_brief_occlusion() -> None:
     assert label_before == label_after
 
 
+def test_recycled_label_is_reported_once() -> None:
+    """A label recycled onto a new physical person is reported exactly once.
+
+    Fighter B disappears for longer than ``max_missed_frames``, so ByteTrack
+    hands the reappearing detection a brand-new internal track id and the
+    label pool recycles "B" onto it — that transition must surface through
+    ``consume_relabeled`` so per-label state (e.g. smoothing filters) can be
+    reset by the caller.
+    """
+    tracker = _make_supervision_tracker()  # max_missed_frames=15
+    recycled_at: list[int] = []
+    for i in range(80):
+        t = i / _FPS
+        detections = [_detection(0.30)]
+        if i < 20 or i >= 45:  # B absent for 25 frames > max_missed_frames
+            detections.append(_detection(0.70))
+        tracker.update(detections, t, "cam0")
+        relabeled = tracker.consume_relabeled()
+        if relabeled:
+            recycled_at.append(i)
+            assert relabeled == frozenset({"B"})
+
+    assert len(recycled_at) == 1, "expected exactly one recycle event, not repeated reports"
+
+
+def test_no_recycle_reported_without_a_gap() -> None:
+    """Two continuously-tracked fighters must never report a recycled label."""
+    tracker = _make_supervision_tracker()
+    for i in range(_FPS):
+        t = i / _FPS
+        left = _detection(0.25 + 0.003 * i)
+        right = _detection(0.75 - 0.003 * i)
+        tracker.update([left, right], t, "cam0")
+        assert tracker.consume_relabeled() == frozenset()
+
+
 def test_empty_frames_are_handled() -> None:
     """Frames with no detections must not crash and return nothing."""
     tracker = _make_supervision_tracker()
@@ -99,3 +135,52 @@ def test_switchable_tracker_toggles_and_keeps_working() -> None:
     assert len(centroid_out) == 1
 
     assert switchable.toggle() == "supervision"
+
+
+def _make_switchable(use_primary: bool = True) -> SwitchableTracker:
+    return SwitchableTracker(
+        primary=_make_supervision_tracker(),
+        fallback=FighterTracker(max_match_distance=0.25, max_missed_frames=15, max_fighters=2),
+        use_primary=use_primary,
+    )
+
+
+def test_toggle_reports_live_labels_as_relabeled() -> None:
+    """Switching backends must report every live label as relabeled.
+
+    Each tracker assigns labels independently, so after a switch "A" may be a
+    different physical person — but the incoming tracker cannot know a handover
+    happened and reports nothing on its own. If the switch is not reported, the
+    smoother keeps the departed fighter's filter state and the new person's
+    first frames produce a phantom speed spike.
+    """
+    switchable = _make_switchable()
+    for i in range(10):  # warm up ByteTrack so labels are actually in play
+        switchable.update([_detection(0.3), _detection(0.7)], i / _FPS, "cam0")
+    switchable.consume_relabeled()  # drain warm-up churn
+
+    switchable.toggle()
+
+    assert switchable.consume_relabeled() == frozenset({"A", "B"})
+
+
+def test_toggle_relabels_are_reported_once() -> None:
+    """The toggle-induced relabel set is cleared after it is consumed."""
+    switchable = _make_switchable()
+    for i in range(10):
+        switchable.update([_detection(0.4)], i / _FPS, "cam0")
+    switchable.consume_relabeled()
+
+    switchable.toggle()
+    assert switchable.consume_relabeled() != frozenset()
+    assert switchable.consume_relabeled() == frozenset()
+
+
+def test_no_toggle_means_no_relabel() -> None:
+    """Steady tracking through the wrapper reports nothing, as before."""
+    switchable = _make_switchable()
+    for i in range(_FPS):
+        left = _detection(0.25 + 0.003 * i)
+        right = _detection(0.75 - 0.003 * i)
+        switchable.update([left, right], i / _FPS, "cam0")
+        assert switchable.consume_relabeled() == frozenset()

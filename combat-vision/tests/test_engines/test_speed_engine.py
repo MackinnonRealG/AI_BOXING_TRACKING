@@ -83,3 +83,36 @@ def test_right_hand_untouched(jab_sequence: tuple[list[TrackedPose], dict]) -> N
     poses, meta = jab_sequence
     events = _run_engine(poses, calibration_from_meta(meta))
     assert all(e.limb == Limb.LEFT_HAND for e in events)
+
+
+def test_calibrating_mid_stroke_does_not_corrupt_peak_speed(
+    jab_sequence: tuple[list[TrackedPose], dict],
+) -> None:
+    """Completing calibration mid-punch must not mix px/s and m/s samples.
+
+    Buffered speed samples must stay in raw pixels internally and only be
+    scaled to the *current* calibration at comparison/publish time — if a
+    stale px/s sample were ever averaged together with an already-scaled
+    m/s sample (or vice versa), the smoothed/peak speed would be nonsense.
+    """
+    poses, meta = jab_sequence
+    calibration = calibration_from_meta(meta, calibrated=False)
+    bus = EventBus()
+    events: list[SpeedPeakEvent] = []
+    bus.subscribe(SpeedPeakEvent, events.append)
+    engine = SpeedEngine(bus, get_profile("boxing"), calibration, SpeedEngineConfig())
+
+    # The fixture's qualifying stroke runs roughly frames 34-46 (uncalibrated
+    # thresholds); calibrating at frame 40 lands squarely inside it.
+    midpoint = 40
+    for pose in poses[:midpoint]:
+        engine.process(pose)
+    calibration.set_scale(meta["metres_per_pixel"])  # calibrate mid-stroke
+    for pose in poses[midpoint:]:
+        engine.process(pose)
+    engine.finish()
+
+    true_peak = meta["true_peak_speed_mps"]
+    assert len(events) == 1
+    assert events[0].unit == SpeedUnit.METERS_PER_SECOND
+    assert 0.70 * true_peak <= events[0].peak_speed <= 1.10 * true_peak

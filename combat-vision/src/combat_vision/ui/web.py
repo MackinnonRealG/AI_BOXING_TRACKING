@@ -22,11 +22,18 @@ _clients: list[WebSocket] = []
 def push_stats(stats: dict[str, Any]) -> None:
     """Update the latest stats snapshot (called by a pipeline stats sink).
 
+    Rebinds the module global to a fresh dict rather than mutating the
+    existing one in place: this is meant to be called from the pipeline
+    thread while ``stats_socket`` reads ``_latest_stats`` concurrently on the
+    asyncio event loop, and a bare name rebind is a single atomic bytecode
+    op — readers always see either the complete old snapshot or the complete
+    new one, never a dict caught mid ``clear()``/``update()``.
+
     TODO: fan out to connected clients from the pipeline thread via an
     asyncio queue instead of relying on client polling.
     """
-    _latest_stats.clear()
-    _latest_stats.update(stats)
+    global _latest_stats
+    _latest_stats = dict(stats)
 
 
 @app.get("/health")
@@ -49,4 +56,10 @@ async def stats_socket(websocket: WebSocket) -> None:
             await websocket.receive_text()
             await websocket.send_json(_latest_stats)
     except WebSocketDisconnect:
-        _clients.remove(websocket)
+        pass
+    finally:
+        # finally (not just the WebSocketDisconnect except) so any other
+        # failure — a protocol error, a send on an already-closed socket,
+        # anything — still frees the slot instead of leaking it forever.
+        if websocket in _clients:
+            _clients.remove(websocket)

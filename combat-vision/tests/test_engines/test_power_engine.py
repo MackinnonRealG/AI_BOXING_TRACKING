@@ -2,13 +2,33 @@
 
 from __future__ import annotations
 
+from dataclasses import replace
+
 from combat_vision.engines.power import PowerEngine
 from combat_vision.engines.speed import SpeedEngine
 from combat_vision.events.bus import EventBus
-from combat_vision.events.types import Limb, PowerEstimateEvent, TrackedPose
+from combat_vision.events.types import (
+    KeypointName,
+    Limb,
+    Pose,
+    PowerEstimateEvent,
+    TrackedPose,
+)
 from combat_vision.sports import get_profile
 from combat_vision.utils.config import PowerEngineConfig, SpeedEngineConfig
 from tests.conftest import calibration_from_meta
+
+
+def _without_keypoint(
+    poses: list[TrackedPose], name: KeypointName
+) -> list[TrackedPose]:
+    """A copy of ``poses`` with one keypoint dropped from every frame."""
+    result = []
+    for tracked in poses:
+        keypoints = dict(tracked.pose.keypoints)
+        keypoints.pop(name, None)
+        result.append(replace(tracked, pose=Pose(keypoints=keypoints)))
+    return result
 
 
 def _run(poses: list[TrackedPose], meta: dict) -> list[PowerEstimateEvent]:
@@ -58,3 +78,21 @@ def test_idle_produces_no_estimates(idle_sequence: tuple[list[TrackedPose], dict
     """No candidates -> no power estimates."""
     poses, meta = idle_sequence
     assert _run(poses, meta) == []
+
+
+def test_missing_elbow_scores_zero_extension_not_full_extension(
+    jab_sequence: tuple[list[TrackedPose], dict],
+) -> None:
+    """An occluded elbow must not score as if the limb were fully extended.
+
+    With the extension component forced to 0 (instead of the old 180°-default
+    inflating it to 1.0), the score can only come from speed + rotation, so
+    it must land well below the full-keypoints baseline (~35-60, see
+    test_straight_arm_jab_score_is_plausible).
+    """
+    poses, meta = jab_sequence
+    poses = _without_keypoint(poses, KeypointName.LEFT_ELBOW)
+    estimates = _run(poses, meta)
+
+    assert len(estimates) == 1
+    assert 0.0 < estimates[0].score <= 30.0

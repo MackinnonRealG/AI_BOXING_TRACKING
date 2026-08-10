@@ -70,6 +70,8 @@ class Pipeline:
 
                 detections = self._pose_backend.detect(frame)
                 tracked = self._tracker.update(detections, frame.timestamp_s, frame.camera_id)
+                for relabeled in self._tracker.consume_relabeled():
+                    self._smoother.reset(relabeled)
                 smoothed = [self._smoother.smooth(t) for t in tracked]
 
                 for pose in smoothed:

@@ -117,7 +117,13 @@ class PowerEngine(MetricsEngine):
         )
 
     def _extension(self, limb: Limb, window: list[TrackedPose]) -> float:
-        """Joint straightness (0..1) at the stroke's point of maximum reach."""
+        """Joint straightness (0..1) at the stroke's point of maximum reach.
+
+        Returns 0.0 (no extension credit, not full credit) when the limb's
+        proximal/distal keypoints are never both visible over the window, or
+        when the joint vertex itself is missing at the best-reach frame — an
+        occluded limb must not score as if it were fully extended.
+        """
         proximal, joint, distal = _LIMB_JOINTS[limb]
 
         def reach(tracked: TrackedPose) -> float:
@@ -128,8 +134,12 @@ class PowerEngine(MetricsEngine):
                 self._calibration.to_pixels(p.x, p.y), self._calibration.to_pixels(d.x, d.y)
             )
 
-        pose = max(window, key=reach).pose
-        angle = self._joint_angle(pose, proximal, joint, distal)
+        best = max(window, key=reach)
+        if reach(best) < 0:
+            return 0.0
+        angle = self._joint_angle(best.pose, proximal, joint, distal)
+        if angle is None:
+            return 0.0
         normalized = (angle - _EXTENSION_MIN_DEG) / (_EXTENSION_MAX_DEG - _EXTENSION_MIN_DEG)
         return max(0.0, min(normalized, 1.0))
 
@@ -156,11 +166,11 @@ class PowerEngine(MetricsEngine):
 
     def _joint_angle(
         self, pose: Pose, a: KeypointName, vertex: KeypointName, b: KeypointName
-    ) -> float:
-        """Angle at ``vertex`` in degrees; 180 when keypoints are missing."""
+    ) -> float | None:
+        """Angle at ``vertex`` in degrees, or None if any keypoint is missing."""
         pa, pv, pb = pose.get(a), pose.get(vertex), pose.get(b)
         if pa is None or pv is None or pb is None:
-            return 180.0
+            return None
         return geometry.angle_at(
             self._calibration.to_pixels(pv.x, pv.y),
             self._calibration.to_pixels(pa.x, pa.y),

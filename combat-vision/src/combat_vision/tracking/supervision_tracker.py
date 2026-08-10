@@ -65,6 +65,7 @@ class SupervisionTracker:
             _LabelSlot(label=string.ascii_uppercase[i]) for i in range(max_fighters)
         ]
         self._frame_index = 0
+        self._relabeled: set[FighterId] = set()
 
     def update(
         self, detections: list[PersonDetection], timestamp_s: float, camera_id: str
@@ -134,5 +135,15 @@ class SupervisionTracker:
             if self._frame_index - slot.last_seen_frame > self._max_missed_frames:
                 slot.track_id = track_id
                 slot.last_seen_frame = self._frame_index
+                # This label now points at a *different* physical person —
+                # any per-label state elsewhere (e.g. smoothing filters) is
+                # stale and must be reset.
+                self._relabeled.add(slot.label)
                 return slot.label
         return None  # more people than fighter slots — ignore extras
+
+    def consume_relabeled(self) -> frozenset[FighterId]:
+        """Labels recycled onto a different track id since the last call."""
+        labels = frozenset(self._relabeled)
+        self._relabeled.clear()
+        return labels

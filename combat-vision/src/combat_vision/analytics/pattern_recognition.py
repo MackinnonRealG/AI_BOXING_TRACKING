@@ -59,15 +59,17 @@ class PatternRecognizer:
     def __init__(self, repo: SessionRepository) -> None:
         self._repo = repo
 
-    def discover(self, fighter_label: str, min_support: int = 5) -> list[Pattern]:
-        """Return win-correlated patterns for ``fighter_label``.
+    def discover(self, fighter_id: int, min_support: int = 5) -> list[Pattern]:
+        """Return win-correlated patterns for the physical fighter ``fighter_id``.
 
         Needs at least ``min_support`` labelled rounds on *each* side of a
         split; returns an empty list when there is not enough labelled data.
         """
-        rows = self._collect(fighter_label)
+        rows = self._collect(fighter_id)
         if len(rows) < 2 * min_support:
             return []
+
+        fighter_name = self._repo.fighter_name(fighter_id) or f"#{fighter_id}"
 
         patterns: list[Pattern] = []
         for feature, label in _FEATURE_LABELS.items():
@@ -94,7 +96,7 @@ class PatternRecognizer:
             patterns.append(
                 Pattern(
                     description=(
-                        f"Fighter {fighter_label}: rounds with {favorable} {label} were won "
+                        f"Fighter {fighter_name}: rounds with {favorable} {label} were won "
                         f"{win_rate:.0%} of the time vs {other_rate:.0%} otherwise."
                     ),
                     support=len(values),
@@ -105,18 +107,35 @@ class PatternRecognizer:
         patterns.sort(key=lambda p: p.confidence * p.support, reverse=True)
         return patterns
 
-    def _collect(self, fighter_label: str) -> list[tuple[dict[str, float | None], bool]]:
-        """(features, won) per labelled round for the fighter."""
+    def _collect(self, fighter_id: int) -> list[tuple[dict[str, float | None], bool]]:
+        """(features, won) per labelled round for the physical fighter.
+
+        Each session's raw per-session label ("A"/"B") is resolved via
+        :meth:`SessionRepository.labels_for_fighter` — the same physical
+        fighter can hold a different label in different sessions, and a
+        session this fighter never appeared in is skipped entirely. Labels,
+        events, and rounds are each fetched in one batched query up front
+        rather than two queries per session in the loop below.
+        """
+        sessions = self._repo.list_sessions()
+        labels = self._repo.labels_for_fighter(fighter_id)
+        relevant_ids = [s.id for s in sessions if s.id in labels]
+        events_by_session = self._repo.events_for_sessions(relevant_ids)
+        rounds_by_session = self._repo.rounds_for_sessions(relevant_ids)
+
         rows: list[tuple[dict[str, float | None], bool]] = []
-        for session in self._repo.list_sessions():
-            events = self._repo.events_for_session(session.id)
-            for rnd in self._repo.rounds_for_session(session.id):
+        for session in sessions:
+            label = labels.get(session.id)
+            if label is None:
+                continue
+            events = events_by_session.get(session.id, [])
+            for rnd in rounds_by_session.get(session.id, []):
                 if rnd.outcome is None or rnd.outcome == "draw" or rnd.end_s is None:
                     continue
                 rows.append(
                     (
-                        _round_features(fighter_label, rnd, events),
-                        rnd.outcome == fighter_label,
+                        _round_features(label, rnd, events),
+                        rnd.outcome == label,
                     )
                 )
         return rows

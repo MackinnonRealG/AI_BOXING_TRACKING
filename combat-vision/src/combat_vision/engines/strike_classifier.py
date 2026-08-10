@@ -158,6 +158,12 @@ class StrikeClassifierEngine(MetricsEngine):
         elbow_angle = self._joint_angle(
             extension_pose, shoulder_name, elbow_name, wrist_name
         )
+        if elbow_angle is None:
+            # Elbow/shoulder never both visible at the extension frame — no
+            # reliable geometry to classify from. Missing data must not be
+            # read as "arm was straight" (which is what a 180° default would
+            # imply and confidently misclassify as a jab/cross).
+            return StrikeType.UNKNOWN, 0.0
 
         dx = path[-1][0] - path[0][0]
         dy = path[-1][1] - path[0][1]
@@ -295,11 +301,11 @@ class StrikeClassifierEngine(MetricsEngine):
 
     def _joint_angle(
         self, pose: Pose, a: KeypointName, vertex: KeypointName, b: KeypointName
-    ) -> float:
-        """Angle at ``vertex`` in degrees; 180 when keypoints are missing."""
+    ) -> float | None:
+        """Angle at ``vertex`` in degrees, or None if any keypoint is missing."""
         pa, pv, pb = pose.get(a), pose.get(vertex), pose.get(b)
         if pa is None or pv is None or pb is None:
-            return 180.0
+            return None
         return geometry.angle_at(
             self._calibration.to_pixels(pv.x, pv.y),
             self._calibration.to_pixels(pa.x, pa.y),

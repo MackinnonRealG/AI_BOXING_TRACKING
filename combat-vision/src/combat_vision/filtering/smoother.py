@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from collections import defaultdict
 
-from combat_vision.events.types import Keypoint, KeypointName, Pose, TrackedPose
+from combat_vision.events.types import FighterId, Keypoint, KeypointName, Pose, TrackedPose
 from combat_vision.filtering.one_euro import OneEuroFilter
 
 
@@ -42,3 +42,14 @@ class PoseSmoother:
             timestamp_s=tracked.timestamp_s,
             camera_id=tracked.camera_id,
         )
+
+    def reset(self, fighter_id: FighterId) -> None:
+        """Drop all filter state for one fighter label.
+
+        Call this when a tracker reassigns the label to a different physical
+        person (see :meth:`~combat_vision.tracking.base.Tracker.consume_relabeled`)
+        — otherwise the new person's first frames get smoothed against the
+        departed fighter's stale position/velocity, producing a spurious
+        speed spike that corrupts downstream speed/strike metrics.
+        """
+        self._filters.pop(fighter_id, None)

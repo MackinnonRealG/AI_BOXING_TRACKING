@@ -62,6 +62,17 @@ def _fighter_names(args: argparse.Namespace) -> dict[str, str]:
     return names
 
 
+def _resolve_camera_index(args: argparse.Namespace, default_index: int) -> int:
+    """The webcam index to open: ``--camera`` if given, else ``default_index``.
+
+    Must use ``is not None`` — ``args.camera or default_index`` would treat
+    an explicit ``--camera 0`` as falsy and silently substitute the default,
+    which is wrong both for opening the device and for the source label
+    recorded with the session.
+    """
+    return args.camera if args.camera is not None else default_index
+
+
 def _select_sport(current: str | None) -> str:
     """Interactive sport selection when --sport was not given."""
     if current is not None:
@@ -104,12 +115,13 @@ def _run_live(args: argparse.Namespace, sport: str, config: object) -> None:
 
     assert isinstance(config, AppConfig)
     names = _fighter_names(args)
-    source_name = args.rtsp if args.rtsp else f"webcam:{args.camera or config.capture.camera_index}"
+    camera_index = _resolve_camera_index(args, config.capture.camera_index)
+    source_name = args.rtsp if args.rtsp else f"webcam:{camera_index}"
     source = (
         RtspSource(args.rtsp)
         if args.rtsp
         else WebcamSource(
-            index=args.camera if args.camera is not None else config.capture.camera_index,
+            index=camera_index,
             width=config.capture.frame_width,
             height=config.capture.frame_height,
         )

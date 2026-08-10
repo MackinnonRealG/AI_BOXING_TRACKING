@@ -2,14 +2,35 @@
 
 from __future__ import annotations
 
+from dataclasses import replace
+
 from combat_vision.engines.speed import SpeedEngine
 from combat_vision.engines.stance import StanceEngine
 from combat_vision.engines.strike_classifier import StrikeClassifierEngine
 from combat_vision.events.bus import EventBus
-from combat_vision.events.types import Limb, StrikeEvent, StrikeType, TrackedPose
+from combat_vision.events.types import (
+    KeypointName,
+    Limb,
+    Pose,
+    StrikeEvent,
+    StrikeType,
+    TrackedPose,
+)
 from combat_vision.sports import get_profile
 from combat_vision.utils.config import SpeedEngineConfig, StanceConfig, StrikeClassifierConfig
 from tests.conftest import calibration_from_meta
+
+
+def _without_keypoint(
+    poses: list[TrackedPose], name: KeypointName
+) -> list[TrackedPose]:
+    """A copy of ``poses`` with one keypoint dropped from every frame."""
+    result = []
+    for tracked in poses:
+        keypoints = dict(tracked.pose.keypoints)
+        keypoints.pop(name, None)
+        result.append(replace(tracked, pose=Pose(keypoints=keypoints)))
+    return result
 
 
 def _run(poses: list[TrackedPose], meta: dict) -> list[StrikeEvent]:
@@ -57,3 +78,19 @@ def test_idle_produces_no_strikes(idle_sequence: tuple[list[TrackedPose], dict])
     """No candidates -> no classified strikes."""
     poses, meta = idle_sequence
     assert _run(poses, meta) == []
+
+
+def test_missing_elbow_is_unknown_not_a_confident_jab(
+    jab_sequence: tuple[list[TrackedPose], dict],
+) -> None:
+    """An occluded elbow must not be read as a straight (extended) arm.
+
+    Missing geometry should demote the strike to UNKNOWN, not manufacture a
+    confident jab/cross classification from a fabricated 180° elbow angle.
+    """
+    poses, meta = jab_sequence
+    poses = _without_keypoint(poses, KeypointName.LEFT_ELBOW)
+    strikes = _run(poses, meta)
+
+    assert len(strikes) == 1
+    assert strikes[0].strike_type == StrikeType.UNKNOWN
