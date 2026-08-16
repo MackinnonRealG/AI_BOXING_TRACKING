@@ -34,6 +34,7 @@ from combat_vision.events.bus import EventBus
 from combat_vision.events.types import (
     CleanTechniqueEvent,
     FighterId,
+    FighterRelabeledEvent,
     KeypointName,
     Limb,
     RotationFaultEvent,
@@ -64,6 +65,18 @@ class RotationEngine(MetricsEngine):
             lambda: deque(maxlen=_BUFFER_FRAMES)
         )
         bus.subscribe(SpeedPeakEvent, self._on_candidate)
+        bus.subscribe(FighterRelabeledEvent, self._on_relabeled)
+
+    def _on_relabeled(self, event: FighterRelabeledEvent) -> None:
+        """Drop buffered poses for a label now held by a different person.
+
+        Buffered poses are keyed by frame timestamp, not by who's wearing
+        the label — without clearing this, a strike thrown moments after
+        the relabel would window over a mix of the departed fighter's
+        tail-end poses and the new fighter's poses, computing a shoulder/hip
+        rotation delta across two different people's torsos.
+        """
+        self._buffers.pop(event.fighter_id, None)
 
     def process(self, tracked: TrackedPose) -> None:
         """Buffer poses so stroke windows are available when candidates fire."""

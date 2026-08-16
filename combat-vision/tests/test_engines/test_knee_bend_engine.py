@@ -131,6 +131,50 @@ def test_relabel_clears_posture_state_so_the_new_person_gets_an_initial_event() 
     assert len(events) == 1
 
 
+def test_relabel_clears_the_pose_buffer_so_strikes_do_not_mix_fighters() -> None:
+    """A strike thrown right after a relabel must not window over the
+    departed fighter's poses.
+
+    Without clearing the buffer, a strike whose window spans the relabel
+    boundary would pick up the departed (locked-knee) fighter's pose at
+    the window's start and wrongly fault the new (bent-knee) fighter for
+    having no leg drive.
+    """
+    bus = EventBus()
+    faults: list[LegDriveFaultEvent] = []
+    clean: list[CleanTechniqueEvent] = []
+    bus.subscribe(LegDriveFaultEvent, faults.append)
+    bus.subscribe(CleanTechniqueEvent, clean.append)
+    engine = KneeBendEngine(bus, get_profile("boxing"), _CALIBRATION, KneeBendConfig())
+
+    # Departed fighter "A": locked knees, buffered up to t=0.4.
+    engine.process(TrackedPose(fighter_id="A", pose=_pose(True), timestamp_s=0.0))
+    engine.process(TrackedPose(fighter_id="A", pose=_pose(True), timestamp_s=0.4))
+
+    engine._on_relabeled(FighterRelabeledEvent(timestamp_s=0.4, fighter_id="A"))
+
+    # New fighter "A": bent knees, buffered from t=0.5 onward.
+    engine.process(TrackedPose(fighter_id="A", pose=_pose(False), timestamp_s=0.5))
+    engine.process(TrackedPose(fighter_id="A", pose=_pose(False), timestamp_s=0.6))
+
+    # A strike whose window (0.3 -> 0.6) would have spanned the relabel
+    # boundary if the old poses were still buffered.
+    bus.publish(
+        SpeedPeakEvent(
+            timestamp_s=0.6,
+            fighter_id="A",
+            limb=Limb.LEFT_HAND,
+            peak_speed=6.0,
+            unit=_MPS,
+            start_s=0.3,
+            end_s=0.6,
+        )
+    )
+
+    assert faults == []
+    assert len(clean) == 1  # correctly judged from the new fighter's bent knees alone
+
+
 def test_missing_leg_keypoints_produce_no_posture_events() -> None:
     """Without both full leg triples, there is nothing reliable to classify."""
     bus = EventBus()

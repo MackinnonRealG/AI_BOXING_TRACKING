@@ -27,6 +27,7 @@ from combat_vision.engines.base import MetricsEngine
 from combat_vision.events.bus import EventBus
 from combat_vision.events.types import (
     FighterId,
+    FighterRelabeledEvent,
     KeypointName,
     Limb,
     Pose,
@@ -74,6 +75,18 @@ class PowerEngine(MetricsEngine):
             lambda: deque(maxlen=_BUFFER_FRAMES)
         )
         bus.subscribe(SpeedPeakEvent, self._on_candidate)
+        bus.subscribe(FighterRelabeledEvent, self._on_relabeled)
+
+    def _on_relabeled(self, event: FighterRelabeledEvent) -> None:
+        """Drop buffered poses for a label now held by a different person.
+
+        Buffered poses are keyed by frame timestamp, not by who's wearing
+        the label — without clearing this, a strike thrown moments after
+        the relabel would window over a mix of the departed fighter's
+        tail-end poses and the new fighter's poses, scoring power from the
+        wrong person's kinematics.
+        """
+        self._buffers.pop(event.fighter_id, None)
 
     @property
     def _speed_ceiling(self) -> float:

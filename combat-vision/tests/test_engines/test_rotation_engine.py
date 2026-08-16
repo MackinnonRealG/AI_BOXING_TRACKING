@@ -17,6 +17,7 @@ from combat_vision.engines.rotation import RotationEngine
 from combat_vision.events.bus import EventBus
 from combat_vision.events.types import (
     CleanTechniqueEvent,
+    FighterRelabeledEvent,
     Keypoint,
     KeypointName,
     Limb,
@@ -115,6 +116,49 @@ def test_small_shoulder_turn_is_not_judged_either_way() -> None:
     faults, clean = _run((0.0, 0.0), (5.0, 0.0), RotationEngineConfig())
     assert faults == []
     assert clean == []
+
+
+def test_relabel_clears_the_pose_buffer_so_strikes_do_not_mix_fighters() -> None:
+    """A strike thrown right after a relabel must not window over the
+    departed fighter's poses.
+
+    The departed fighter's last pose (0°, 0°) is engineered so that, if
+    buffered poses leaked across the relabel, the window's start would come
+    from them instead of the new fighter — making an 80°/40° shoulder/hip
+    delta (ratio 0.5, borderline clean) instead of the new fighter's real
+    40°/0° stroke (ratio 0.0, a genuine no-hip-turn fault). Only the fixed
+    (fault) verdict is a correct read of what the new fighter actually did.
+    """
+    bus = EventBus()
+    faults: list[RotationFaultEvent] = []
+    clean: list[CleanTechniqueEvent] = []
+    bus.subscribe(RotationFaultEvent, faults.append)
+    bus.subscribe(CleanTechniqueEvent, clean.append)
+    engine = RotationEngine(bus, get_profile("boxing"), _CALIBRATION, RotationEngineConfig())
+
+    # Departed fighter "A": square, buffered at t=0.0.
+    engine.process(TrackedPose(fighter_id="A", pose=_pose(0.0, 0.0), timestamp_s=0.0))
+
+    engine._on_relabeled(FighterRelabeledEvent(timestamp_s=0.0, fighter_id="A"))
+
+    # New fighter "A": shoulders turn 40->80, hips never move (a real no-hip-turn punch).
+    engine.process(TrackedPose(fighter_id="A", pose=_pose(40.0, 40.0), timestamp_s=0.5))
+    engine.process(TrackedPose(fighter_id="A", pose=_pose(80.0, 40.0), timestamp_s=0.6))
+
+    bus.publish(
+        SpeedPeakEvent(
+            timestamp_s=0.6,
+            fighter_id="A",
+            limb=Limb.RIGHT_HAND,
+            peak_speed=6.0,
+            unit=_MPS,
+            start_s=0.0,  # spans the relabel boundary if the old pose were still buffered
+            end_s=0.6,
+        )
+    )
+
+    assert clean == []
+    assert len(faults) == 1
 
 
 def test_kick_candidates_are_ignored() -> None:

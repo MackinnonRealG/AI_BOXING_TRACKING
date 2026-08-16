@@ -87,13 +87,22 @@ class KneeBendEngine(MetricsEngine):
         bus.subscribe(FighterRelabeledEvent, self._on_relabeled)
 
     def _on_relabeled(self, event: FighterRelabeledEvent) -> None:
-        """Drop posture debounce state for a label now held by a different person.
+        """Drop posture debounce state and buffered poses for a label now held
+        by a different person.
 
-        Same reasoning as :meth:`engines.guard.GuardEngine._on_relabeled`: a
-        relabeled fighter starting in the same posture the departed one left
+        Posture reasoning mirrors :meth:`engines.guard.GuardEngine._on_relabeled`:
+        a relabeled fighter starting in the same posture the departed one left
         behind would never get an initial :class:`KneeBendStateEvent`.
+
+        The pose buffer must go too, not just posture: buffered poses are
+        keyed by frame timestamp, not by who's wearing the label, so without
+        clearing it a strike thrown moments after the relabel would window
+        over a mix of the departed fighter's tail-end poses and the new
+        fighter's poses, publishing a leg-drive result computed from the
+        wrong person's legs.
         """
         self._posture.pop(event.fighter_id, None)
+        self._buffers.pop(event.fighter_id, None)
 
     def process(self, tracked: TrackedPose) -> None:
         """Buffer poses and advance the continuous locked-knee posture check."""
