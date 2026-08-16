@@ -30,7 +30,7 @@ def test_successful_download_lands_at_the_final_path(monkeypatch: pytest.MonkeyP
     assert path.exists()
     assert path.read_bytes() == b"model bytes"
     assert path.name == "pose_landmarker_lite.task"
-    assert not path.with_suffix(path.suffix + ".part").exists()
+    assert list(path.parent.glob("*.part")) == []
 
 
 def test_failed_download_leaves_no_file_at_the_final_path(
@@ -54,7 +54,40 @@ def test_failed_download_leaves_no_file_at_the_final_path(
 
     final_path = tmp_path / "pose_landmarker_lite.task"
     assert not final_path.exists()
-    assert not final_path.with_suffix(final_path.suffix + ".part").exists()  # cleaned up too
+    assert list(tmp_path.glob("*.part")) == []  # cleaned up too
+
+
+def test_concurrent_downloads_of_the_same_variant_do_not_collide(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """Two invocations racing on the same variant must not share one temp file.
+
+    Before the fix, both downloads derived the same ``.part`` path from the
+    variant name alone; one invocation's rename/cleanup could stomp the
+    other's still-in-flight write. Recursing into a second ensure_model()
+    call mid-download reproduces that race without real threads: at that
+    point ``path.exists()`` is still False for both, so both proceed.
+    """
+    seen_tmp_names: list[str] = []
+    calls = 0
+
+    def racing_urlretrieve(url: str, filename: str) -> None:
+        nonlocal calls
+        seen_tmp_names.append(filename)
+        calls += 1
+        if calls == 1:
+            ensure_model("lite")  # a second invocation starts mid-download
+        Path(filename).write_bytes(b"model bytes")
+
+    monkeypatch.setattr(mediapipe_backend.urllib.request, "urlretrieve", racing_urlretrieve)
+
+    path = ensure_model("lite")
+
+    assert len(seen_tmp_names) == 2
+    assert len(set(seen_tmp_names)) == 2  # distinct temp files, never a shared one
+    assert path.exists()
+    assert path.read_bytes() == b"model bytes"
+    assert list(tmp_path.glob("*.part")) == []  # nothing left behind
 
 
 def test_already_cached_model_skips_the_network(

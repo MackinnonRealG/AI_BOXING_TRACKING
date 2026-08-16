@@ -9,6 +9,8 @@ local cache on first use.
 from __future__ import annotations
 
 import logging
+import os
+import tempfile
 import urllib.request
 from pathlib import Path
 from typing import Any
@@ -59,18 +61,25 @@ def _model_cache_dir() -> Path:
 def ensure_model(variant: str) -> Path:
     """Return the local path of the landmarker model, downloading if absent.
 
-    Downloads to a ``.part`` sibling and renames it into place only after a
-    full, successful transfer. A network failure/interruption mid-download
-    otherwise leaves a truncated file sitting at the final path; since the
-    only freshness check is ``path.exists()``, every future run would
-    silently hand that corrupt file to PoseLandmarker instead of retrying.
+    Downloads to a uniquely-named ``.part`` sibling and renames it into place
+    only after a full, successful transfer. A network failure/interruption
+    mid-download otherwise leaves a truncated file sitting at the final path;
+    since the only freshness check is ``path.exists()``, every future run
+    would silently hand that corrupt file to PoseLandmarker instead of
+    retrying. The temp name is unique per call (not just per variant) so two
+    concurrent invocations downloading the same variant never share one
+    `.part` file and race each other's rename/cleanup.
     """
     if variant not in _MODEL_URLS:
         raise ValueError(f"unknown model variant {variant!r}; choose from {sorted(_MODEL_URLS)}")
     path = _model_cache_dir() / f"pose_landmarker_{variant}.task"
     if not path.exists():
         path.parent.mkdir(parents=True, exist_ok=True)
-        tmp_path = path.with_suffix(path.suffix + ".part")
+        fd, tmp_name = tempfile.mkstemp(
+            dir=path.parent, prefix=f".{path.name}.", suffix=".part"
+        )
+        os.close(fd)
+        tmp_path = Path(tmp_name)
         logger.info("downloading pose model %s -> %s", variant, path)
         try:
             urllib.request.urlretrieve(_MODEL_URLS[variant], tmp_path)  # noqa: S310 — fixed https host

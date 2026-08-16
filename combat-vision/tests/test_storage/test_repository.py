@@ -4,6 +4,9 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import pytest
+from sqlalchemy.exc import IntegrityError
+
 from combat_vision.events.types import Limb, SpeedPeakEvent, SpeedUnit
 from combat_vision.storage.repository import SessionRepository
 
@@ -29,6 +32,41 @@ def test_labels_for_fighter_covers_only_sessions_the_fighter_joined(tmp_path: Pa
 
     assert labels == {session_a: "A", session_b: "B"}
     assert session_c not in labels
+
+
+def test_link_fighter_rejects_a_second_label_for_the_same_pair(tmp_path: Path) -> None:
+    """One fighter must hold at most one label per session.
+
+    Without the unique constraint, label_for_fighter could return either row
+    for a fighter linked twice in one session — an arbitrary, silent pick.
+    """
+    repo = _repo(tmp_path, "dup_pair")
+    fighter_id = repo.get_or_create_fighter("Alex")
+    session_id = repo.create_session(
+        sport="boxing", mode="review", source="a.mp4", calibrated=True
+    )
+
+    repo.link_fighter(session_id, fighter_id, "A")
+    with pytest.raises(IntegrityError):
+        repo.link_fighter(session_id, fighter_id, "B")
+
+
+def test_link_fighter_rejects_two_fighters_sharing_a_label(tmp_path: Path) -> None:
+    """One label must map to at most one fighter per session.
+
+    Without the unique constraint, two fighters could both hold label "A" in
+    the same session and labels_for_fighter would silently overwrite one.
+    """
+    repo = _repo(tmp_path, "dup_label")
+    fighter_a = repo.get_or_create_fighter("Alex")
+    fighter_b = repo.get_or_create_fighter("Sam")
+    session_id = repo.create_session(
+        sport="boxing", mode="review", source="a.mp4", calibrated=True
+    )
+
+    repo.link_fighter(session_id, fighter_a, "A")
+    with pytest.raises(IntegrityError):
+        repo.link_fighter(session_id, fighter_b, "A")
 
 
 def test_events_for_sessions_matches_per_session_calls(tmp_path: Path) -> None:

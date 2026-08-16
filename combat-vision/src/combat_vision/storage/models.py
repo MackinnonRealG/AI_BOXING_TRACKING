@@ -9,7 +9,7 @@ from __future__ import annotations
 
 from datetime import UTC, datetime
 
-from sqlalchemy import JSON, DateTime, Float, ForeignKey, Integer, String
+from sqlalchemy import JSON, DateTime, Float, ForeignKey, Integer, String, UniqueConstraint
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
 
 
@@ -53,9 +53,19 @@ class Session(Base):
 
 
 class SessionFighter(Base):
-    """Joins a fighter to a session under a per-session label (A/B)."""
+    """Joins a fighter to a session under a per-session label (A/B).
+
+    A fighter holds at most one label per session, and a label maps back to
+    at most one fighter per session — without both constraints,
+    ``label_for_fighter``/``labels_for_fighter`` could silently pick an
+    arbitrary row among duplicates instead of the one true mapping.
+    """
 
     __tablename__ = "session_fighters"
+    __table_args__ = (
+        UniqueConstraint("session_id", "fighter_id", name="uq_session_fighter"),
+        UniqueConstraint("session_id", "label", name="uq_session_label"),
+    )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     session_id: Mapped[int] = mapped_column(ForeignKey("sessions.id"))
