@@ -16,7 +16,7 @@ from collections.abc import Callable, Sequence
 from combat_vision.capture.base import CameraSource, TimestampedFrame
 from combat_vision.engines.base import MetricsEngine
 from combat_vision.events.bus import EventBus
-from combat_vision.events.types import TrackedPose
+from combat_vision.events.types import FighterRelabeledEvent, TrackedPose
 from combat_vision.filtering.smoother import PoseSmoother
 from combat_vision.pose.base import PoseBackend
 from combat_vision.tracking.base import Tracker
@@ -70,8 +70,16 @@ class Pipeline:
 
                 detections = self._pose_backend.detect(frame)
                 tracked = self._tracker.update(detections, frame.timestamp_s, frame.camera_id)
+                # consume_relabeled() clears on read, so only one caller may
+                # drain it. Do that here and fan out, rather than letting each
+                # consumer poll and race the others for the same one-shot set.
                 for relabeled in self._tracker.consume_relabeled():
                     self._smoother.reset(relabeled)
+                    self._bus.publish(
+                        FighterRelabeledEvent(
+                            timestamp_s=frame.timestamp_s, fighter_id=relabeled
+                        )
+                    )
                 smoothed = [self._smoother.smooth(t) for t in tracked]
 
                 for pose in smoothed:

@@ -6,6 +6,7 @@ import json
 import logging
 from pathlib import Path
 
+from combat_vision.analytics.baseline import personal_best_notes
 from combat_vision.analytics.reports import SessionReport, build_session_report
 from combat_vision.app_builder import build_pipeline
 from combat_vision.capture.video_file import VideoFileSource
@@ -51,6 +52,7 @@ def review_video(
         for label in sorted({e.fighter_id for e in bus.history}):
             fighter_db_id = repo.get_or_create_fighter(names.get(label, f"Fighter {label}"))
             repo.link_fighter(session_id, fighter_db_id, label)
+            report.coaching_notes.extend(personal_best_notes(repo, fighter_db_id, session_id))
         repo.finish_session(session_id, duration_s)
         logger.info("session %d persisted with %d events", session_id, len(bus.history))
 

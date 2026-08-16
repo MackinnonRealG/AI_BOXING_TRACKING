@@ -5,7 +5,14 @@ from __future__ import annotations
 from pathlib import Path
 
 from combat_vision.analytics.trends import compute_trends
-from combat_vision.events.types import Limb, SpeedPeakEvent, SpeedUnit
+from combat_vision.events.types import (
+    GuardStateEvent,
+    KneeBendStateEvent,
+    Limb,
+    RotationFaultEvent,
+    SpeedPeakEvent,
+    SpeedUnit,
+)
 from combat_vision.storage.repository import SessionRepository
 
 
@@ -61,3 +68,42 @@ def test_trends_skip_sessions_the_fighter_never_joined(tmp_path: Path) -> None:
     trends = compute_trends(repo, fighter_id)
 
     assert [p.session_id for p in trends.points] == [joined]
+
+
+def test_technique_faults_count_only_the_bad_direction_of_state_events(
+    tmp_path: Path,
+) -> None:
+    """Guard-up and knees-bent are not faults; only the drop/lock direction counts."""
+    repo = SessionRepository(f"sqlite:///{tmp_path}/faults.db")
+    fighter_id = repo.get_or_create_fighter("Alex")
+
+    session = repo.create_session(sport="boxing", mode="review", source="s.mp4", calibrated=True)
+    repo.link_fighter(session, fighter_id, "A")
+    repo.save_events(
+        session,
+        [
+            GuardStateEvent(timestamp_s=1.0, fighter_id="A", hand=Limb.LEFT_HAND, guard_up=False),
+            GuardStateEvent(timestamp_s=2.0, fighter_id="A", hand=Limb.LEFT_HAND, guard_up=True),
+            KneeBendStateEvent(timestamp_s=3.0, fighter_id="A", locked=True),
+            KneeBendStateEvent(timestamp_s=4.0, fighter_id="A", locked=False),
+            RotationFaultEvent(
+                timestamp_s=5.0,
+                fighter_id="A",
+                limb=Limb.RIGHT_HAND,
+                shoulder_rotation_deg=40.0,
+                hip_rotation_deg=5.0,
+            ),
+            # A different fighter's fault in the same session must not be counted.
+            GuardStateEvent(timestamp_s=6.0, fighter_id="B", hand=Limb.LEFT_HAND, guard_up=False),
+        ],
+    )
+    repo.finish_session(session, 60.0)
+
+    trends = compute_trends(repo, fighter_id)
+
+    assert len(trends.points) == 1
+    point = trends.points[0]
+    # 1 guard drop + 1 locked-knee event + 1 rotation fault = 3; the guard-up,
+    # knees-bent, and other-fighter's-drop events are correctly excluded.
+    assert point.technique_faults == 3
+    assert point.faults_per_minute == 3.0

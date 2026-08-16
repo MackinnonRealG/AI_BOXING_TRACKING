@@ -12,10 +12,17 @@ from collections.abc import Sequence
 from dataclasses import asdict, dataclass, field
 
 from combat_vision.events.types import (
+    CleanTechniqueEvent,
     ComboEvent,
+    DepthPostureSample,
     DistanceSample,
     Event,
+    GuardStateEvent,
+    HeadPostureSample,
+    KneeBendStateEvent,
+    LegDriveFaultEvent,
     PowerEstimateEvent,
+    RotationFaultEvent,
     SpeedPeakEvent,
     StanceSwitchEvent,
     StepEvent,
@@ -41,6 +48,14 @@ class FighterSummary:
     steps: int
     stance_switches: int
     top_combinations: list[tuple[str, int]]
+    guard_drops: int
+    rotation_faults: int
+    leg_drive_faults: int
+    locked_knee_events: int
+    clean_hip_turns: int
+    clean_leg_drives: int
+    avg_head_tilt_deg: float | None
+    avg_torso_lean: float | None
 
 
 @dataclass(frozen=True, slots=True)
@@ -87,6 +102,32 @@ class SessionReport:
             lines.append(f"  Steps: {f.steps}   Stance switches: {f.stance_switches}")
             for sequence, count in f.top_combinations:
                 lines.append(f"  Combo {sequence} ×{count}")
+            if f.guard_drops or f.rotation_faults or f.leg_drive_faults or f.locked_knee_events:
+                lines.append(
+                    f"  Technique faults: guard dropped ×{f.guard_drops}, "
+                    f"no hip turn ×{f.rotation_faults}, no leg drive ×{f.leg_drive_faults}, "
+                    f"locked-knee stretches ×{f.locked_knee_events}"
+                )
+            hip_judged = f.clean_hip_turns + f.rotation_faults
+            if hip_judged:
+                lines.append(
+                    f"  Hip turn: {f.clean_hip_turns} clean / {f.rotation_faults} no-turn "
+                    f"({f.clean_hip_turns / hip_judged:.0%} clean)"
+                )
+            leg_judged = f.clean_leg_drives + f.leg_drive_faults
+            if leg_judged:
+                lines.append(
+                    f"  Leg drive: {f.clean_leg_drives} clean / {f.leg_drive_faults} no-drive "
+                    f"({f.clean_leg_drives / leg_judged:.0%} clean)"
+                )
+            if f.avg_head_tilt_deg is not None:
+                lines.append(f"  Avg head tilt: {f.avg_head_tilt_deg:.0f}° (approximate)")
+            if f.avg_torso_lean is not None:
+                direction = "forward" if f.avg_torso_lean > 0 else "back"
+                lines.append(
+                    f"  Avg torso lean: {direction} "
+                    "(approximate, unitless single-camera depth signal)"
+                )
             lines.append("")
         if self.avg_fighter_distance is not None:
             lines.append(
@@ -151,6 +192,21 @@ def _summarize(
     combo_counter: Counter[str] = Counter(
         "–".join(t.value for t in combo.sequence) for combo in combos
     )
+
+    guard_drops = sum(1 for e in mine if isinstance(e, GuardStateEvent) and not e.guard_up)
+    rotation_faults = sum(1 for e in mine if isinstance(e, RotationFaultEvent))
+    leg_drive_faults = sum(1 for e in mine if isinstance(e, LegDriveFaultEvent))
+    locked_knee_events = sum(1 for e in mine if isinstance(e, KneeBendStateEvent) and e.locked)
+    clean = [e for e in mine if isinstance(e, CleanTechniqueEvent)]
+    clean_hip_turns = sum(1 for e in clean if e.check == "hip_rotation")
+    clean_leg_drives = sum(1 for e in clean if e.check == "leg_drive")
+    head_tilts = [e.tilt_deg for e in mine if isinstance(e, HeadPostureSample)]
+    torso_leans = [
+        e.torso_lean
+        for e in mine
+        if isinstance(e, DepthPostureSample) and e.torso_lean is not None
+    ]
+
     return FighterSummary(
         fighter_id=fighter_id,
         name=name,
@@ -166,6 +222,14 @@ def _summarize(
         steps=len(steps),
         stance_switches=len(switches),
         top_combinations=combo_counter.most_common(3),
+        guard_drops=guard_drops,
+        rotation_faults=rotation_faults,
+        leg_drive_faults=leg_drive_faults,
+        locked_knee_events=locked_knee_events,
+        clean_hip_turns=clean_hip_turns,
+        clean_leg_drives=clean_leg_drives,
+        avg_head_tilt_deg=statistics.fmean(head_tilts) if head_tilts else None,
+        avg_torso_lean=statistics.fmean(torso_leans) if torso_leans else None,
     )
 
 
@@ -194,5 +258,20 @@ def _coaching_notes(summaries: Sequence[FighterSummary], duration_s: float) -> l
             notes.append(
                 f"{who}: connect rate {f.accuracy:.0%} — work distance "
                 "management and setups before volume."
+            )
+        if f.guard_drops / minutes > 3:
+            notes.append(
+                f"{who}: guard dropped {f.guard_drops} times this session — "
+                "make resetting your hands after every exchange automatic."
+            )
+        if f.punch_candidates and f.rotation_faults / f.punch_candidates > 0.25:
+            notes.append(
+                f"{who}: {f.rotation_faults} of {f.punch_candidates} punches had no hip "
+                "turn — you're throwing with your arm, not your hips."
+            )
+        if f.punch_candidates and f.leg_drive_faults / f.punch_candidates > 0.25:
+            notes.append(
+                f"{who}: {f.leg_drive_faults} of {f.punch_candidates} punches were thrown "
+                "with locked knees — stay bent so you can push off the floor."
             )
     return notes

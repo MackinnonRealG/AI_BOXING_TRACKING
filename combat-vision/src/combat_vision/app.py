@@ -151,9 +151,10 @@ def _run_live(args: argparse.Namespace, sport: str, config: object) -> None:
     report = build_session_report(
         sport=sport, source=source_name, duration_s=duration_s, events=bus.history, names=names
     )
-    print(report.to_text())
 
     if not args.no_store and bus.history:
+        from combat_vision.analytics.baseline import personal_best_notes
+
         repo = SessionRepository(config.storage.database_url)
         session_id = repo.create_session(
             sport=sport, mode="live", source=source_name, calibrated=calibration.is_calibrated
@@ -162,6 +163,7 @@ def _run_live(args: argparse.Namespace, sport: str, config: object) -> None:
         for label in sorted({e.fighter_id for e in bus.history}):
             fighter_db_id = repo.get_or_create_fighter(names.get(label, f"Fighter {label}"))
             repo.link_fighter(session_id, fighter_db_id, label)
+            report.coaching_notes.extend(personal_best_notes(repo, fighter_db_id, session_id))
         for number, start_s, end_s in overlay.rounds:
             repo.create_round(session_id, number=number, start_s=start_s, end_s=end_s)
         repo.finish_session(session_id, duration_s)
@@ -172,6 +174,8 @@ def _run_live(args: argparse.Namespace, sport: str, config: object) -> None:
             len(bus.history),
             len(overlay.rounds),
         )
+
+    print(report.to_text())
 
 
 def _run_review(args: argparse.Namespace, sport: str, config: object) -> None:

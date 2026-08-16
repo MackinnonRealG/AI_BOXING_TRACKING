@@ -26,6 +26,10 @@ logger = logging.getLogger(__name__)
 # MediaPipe landmark index -> canonical name (subset we consume).
 _MP_TO_CANONICAL: dict[int, KeypointName] = {
     0: KeypointName.NOSE,
+    2: KeypointName.LEFT_EYE,
+    5: KeypointName.RIGHT_EYE,
+    7: KeypointName.LEFT_EAR,
+    8: KeypointName.RIGHT_EAR,
     11: KeypointName.LEFT_SHOULDER,
     12: KeypointName.RIGHT_SHOULDER,
     13: KeypointName.LEFT_ELBOW,

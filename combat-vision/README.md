@@ -2,6 +2,8 @@
 
 AI camera analysis for **boxing and kickboxing**: point one or more cameras at the fighters and measure punch speed, estimated power, strike types, footwork, stance switches, combinations, and inter-fighter distance — live or from recorded footage — with per-fighter progression tracked across sessions.
 
+Beyond logging *what* happened, it also coaches *how well*: live, actionable technique cues — guard dropping, punching without hip rotation, locked-knee/no-leg-drive punches — plus a guided drill mode (`d` in live mode) that prompts a combo and grades whether you threw it clean, and personal-best tracking that compares each session against your own history instead of a fixed threshold.
+
 ## Setup
 
 Requires Python 3.11 or 3.12 (MediaPipe does not yet ship wheels for newer versions).
@@ -22,6 +24,7 @@ The MediaPipe pose model (`pose_landmarker_lite.task`, ~5 MB) is downloaded auto
 # Live mode: webcam + real-time overlay
 # keys: q quits, h toggles the foot heat map, t toggles the tracker backend
 # (supervision/ByteTrack <-> built-in centroid; also settable via tracking.backend in config)
+# d starts/stops a guided drill for fighter A, cycling through built-in combos
 combat-vision live --sport boxing --camera 0
 combat-vision live --sport kickboxing --rtsp rtsp://192.168.1.20/stream
 
@@ -69,12 +72,18 @@ Design rules that keep the system extensible:
 | `engines/footwork` | ✅ tested | Step detection, stance width, weight shift, per-fighter heat map |
 | `engines/distance` | ✅ tested | Decimated inter-fighter distance samples |
 | `engines/combination` | ✅ tested | Gap-based strike chaining → most-used sequences |
-| `calibration/` | ✅ v1 | Reference-length px→m scale; multi-camera fusion stub |
+| `engines/guard` | ✅ tested | Per-hand guard-height fault: sustained hand drop below chin line → live cue |
+| `engines/rotation` | ✅ tested | Hip-shoulder separation: shoulders turned without matching hip turn → "arm punch" fault |
+| `engines/knee_bend` | ✅ tested | Locked-knee posture + no-leg-drive punches (both knees straight at stroke start) |
+| `engines/head_posture` | ✅ tested | Head-roll (eye line vs shoulder line) — measurement only, not graded as a fault |
+| `engines/depth_posture` | ✅ tested | *Approximate* elbow-flare / torso-lean from MediaPipe's unused `z` channel — measurement only |
+| `calibration/` | ✅ v1 | Reference-length px→m scale; two-camera DLT triangulation math (`triangulation.py`, tested against synthetic geometry — not yet wired to live capture, see Roadmap) |
 | `events/` | ✅ | Typed events + synchronous bus |
 | `storage/` | ✅ | Fighters/sessions/rounds/events schema + repository + alembic |
-| `analytics/` | ✅ tested | Session reports, cross-session trends, pattern recognition (median-split association mining over labelled rounds) |
-| `review/` | ✅ | Video → full pipeline → JSON + text report + persistence |
-| `ui/` | ✅ overlay / 🔲 web | OpenCV overlay (skeleton, strike/power/stance stats, heat map); FastAPI `/stats` websocket stub |
+| `analytics/` | ✅ tested | Session reports (incl. technique-fault counts + coaching notes), cross-session trends (incl. fault rate), per-fighter personal-best baselines, pattern recognition (median-split association mining over labelled rounds) |
+| `review/` | ✅ | Video → full pipeline → JSON + text report + persistence + personal-best notes |
+| `drills.py` / `ui/drill_coach.py` | ✅ tested | Guided drill mode: built-in combo library + countdown/active/result state machine |
+| `ui/` | ✅ overlay / 🔲 web | OpenCV overlay (skeleton incl. eyes/ears, strike/power/stance/guard/knee stats, live fault cues, drill prompts, heat map); FastAPI `/stats` websocket stub |
 
 ## Speed engine (the reference implementation)
 
@@ -88,8 +97,9 @@ Its tests replay synthetic fixtures with known ground truth (a jab whose true pe
 
 ## Roadmap
 
-1. **Learned strike classifier** — replace the geometric heuristics with a small temporal model (1D-CNN over keypoint windows) trained on labelled sparring clips; today's classifier generates exactly that labelled data.
-2. **Two-fighter hardening** — appearance-based re-ID through clinches and long occlusions.
-3. **Web UI** — replace the OpenCV window via the existing FastAPI websocket stub.
+1. **Learned strike classifier** — replace the geometric heuristics with a small temporal model (1D-CNN over keypoint windows) trained on labelled sparring clips; today's classifier generates exactly that labelled data. **Blocked on data**: no labelled clip corpus exists yet — this needs real sparring footage run through review mode and hand-corrected before any training code is worth writing.
+2. **Two-fighter hardening (appearance-based re-ID)** — ByteTrack's motion model already handles clinches/crossings well (see `tracking/supervision_tracker.py`), but re-acquisition after a long occlusion is still motion/order based, not appearance based. A real fix means giving `PoseBackend.detect()` and the `Tracker` interface access to image crops (or a per-detection appearance descriptor) and re-scoring candidates by appearance on re-acquisition — a genuine interface change across `pose/`, `events/types.py`, and `tracking/`, not a one-file patch, so it's scoped as its own future change rather than bolted on here.
+3. **Web UI** — replace the OpenCV window via the existing FastAPI websocket stub. A substantial separate frontend effort, not attempted here.
 4. **Pattern recognition v2** — gradient-boosted trees + SHAP once ~100 labelled rounds exist (v1 median-split mining ships now).
-5. RTSP reconnection policy, multi-camera calibration/fusion, homography-based calibration (current is a single scalar scale).
+5. **Multi-camera calibration/fusion** — the triangulation math (two-view DLT) is done and tested against synthetic camera geometry: see `calibration/triangulation.py`. Still missing, and needs physical cameras (not just code) to build and validate: per-camera intrinsic calibration from real checkerboard captures, extrinsics from shared scene references, and synchronized dual-camera capture wired into the pipeline. RTSP reconnection policy is also still open.
+6. **Personal-baseline coverage** — currently speed-only per strike type; extending it to power score and technique-fault rate (not just hand speed) would sharpen the "am I actually improving" signal further.

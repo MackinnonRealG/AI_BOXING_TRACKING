@@ -10,9 +10,14 @@ from combat_vision.calibration import Calibration
 from combat_vision.capture.base import CameraSource
 from combat_vision.engines.base import MetricsEngine
 from combat_vision.engines.combination import CombinationEngine
+from combat_vision.engines.depth_posture import DepthPostureEngine
 from combat_vision.engines.distance import DistanceEngine
 from combat_vision.engines.footwork import FootworkEngine
+from combat_vision.engines.guard import GuardEngine
+from combat_vision.engines.head_posture import HeadPostureEngine
+from combat_vision.engines.knee_bend import KneeBendEngine
 from combat_vision.engines.power import PowerEngine
+from combat_vision.engines.rotation import RotationEngine
 from combat_vision.engines.speed import SpeedEngine
 from combat_vision.engines.stance import StanceEngine
 from combat_vision.engines.strike_classifier import StrikeClassifierEngine
@@ -62,7 +67,12 @@ def build_pipeline(
     # already contain the current pose when a SpeedPeakEvent fires mid-frame.
     engines: list[MetricsEngine] = [
         StanceEngine(bus, profile, calibration, config.engines.stance),
+        GuardEngine(bus, profile, calibration, config.engines.guard),
         PowerEngine(bus, profile, calibration, config.engines.power),
+        RotationEngine(bus, profile, calibration, config.engines.rotation),
+        KneeBendEngine(bus, profile, calibration, config.engines.knee_bend),
+        HeadPostureEngine(bus, profile, calibration, config.engines.head_posture),
+        DepthPostureEngine(bus, profile, calibration, config.engines.depth_posture),
         StrikeClassifierEngine(bus, profile, calibration, config.engines.strike_classifier),
         FootworkEngine(bus, profile, calibration, config.engines.footwork),
         DistanceEngine(bus, profile, calibration, config.engines.distance),
