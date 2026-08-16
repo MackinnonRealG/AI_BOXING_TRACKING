@@ -32,6 +32,7 @@ from combat_vision.engines.base import MetricsEngine
 from combat_vision.events.bus import EventBus
 from combat_vision.events.types import (
     FighterId,
+    FighterRelabeledEvent,
     GuardStateEvent,
     KeypointName,
     Limb,
@@ -68,6 +69,19 @@ class GuardEngine(MetricsEngine):
         super().__init__(bus, profile, calibration)
         self._config = config
         self._hands: dict[tuple[FighterId, Limb], _HandGuard] = {}
+        bus.subscribe(FighterRelabeledEvent, self._on_relabeled)
+
+    def _on_relabeled(self, event: FighterRelabeledEvent) -> None:
+        """Drop debounce state for a label now held by a different person.
+
+        Without this, a relabeled fighter starting in the same guard state
+        the departed one left behind would hit the ``up_now == current_up``
+        short-circuit in :meth:`_update` and never get an initial
+        :class:`GuardStateEvent` — leaving the overlay showing stale or
+        missing guard status for someone who never actually had it.
+        """
+        for hand in _HAND_KEYPOINT:
+            self._hands.pop((event.fighter_id, hand), None)
 
     def process(self, tracked: TrackedPose) -> None:
         """Classify this frame's guard line and run the debounce state machine."""

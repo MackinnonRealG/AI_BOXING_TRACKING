@@ -80,6 +80,29 @@ def test_triangulate_is_robust_to_small_pixel_noise() -> None:
     assert recovered == pytest.approx(true_point, abs=0.1)
 
 
+def test_near_parallel_rays_raise_instead_of_returning_a_wild_coordinate() -> None:
+    """As depth grows, a parallel stereo rig's rays approach true parallelism.
+
+    Before the fix, only an exact ``w == 0`` raised; anything merely tiny
+    (e.g. w ~ 1e-10, which this depth reliably produces — see the module
+    docstring's tolerance) would silently divide out to a huge, meaningless
+    coordinate instead of raising. The homogeneous w shrinks continuously
+    with depth rather than snapping to exactly zero, so a real near-parallel
+    configuration is what actually exercises the tolerance, not two
+    literally-identical cameras (whose rank-deficient null space doesn't
+    reliably land on the "at infinity" direction at all).
+    """
+    cam_a = _camera(translation=(0.0, 0.0, 0.0))
+    cam_b = _camera(translation=(-0.5, 0.0, 0.0))
+
+    far_point = (0.0, 0.0, 1e13)
+    pixel_a = project(cam_a, far_point)
+    pixel_b = project(cam_b, far_point)
+
+    with pytest.raises(ValueError, match="parallel"):
+        triangulate(cam_a, pixel_a, cam_b, pixel_b)
+
+
 def test_point_behind_the_camera_raises() -> None:
     cam = _camera(translation=(0.0, 0.0, 0.0))
     with pytest.raises(ValueError, match="behind or on the camera plane"):

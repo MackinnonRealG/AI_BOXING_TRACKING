@@ -6,6 +6,7 @@ from combat_vision.calibration import Calibration
 from combat_vision.engines.guard import GuardEngine
 from combat_vision.events.bus import EventBus
 from combat_vision.events.types import (
+    FighterRelabeledEvent,
     GuardStateEvent,
     Keypoint,
     KeypointName,
@@ -77,6 +78,32 @@ def test_brief_dip_is_debounced() -> None:
     frames += [(1.0 + 5 / _FPS + i / _FPS, True, True) for i in range(_FPS)]
     events = _run(frames)
     assert all(e.guard_up for e in events)
+
+
+def test_relabel_clears_debounce_state_so_the_new_person_gets_an_initial_event() -> None:
+    """A relabeled fighter must get their own initial event, not go silent.
+
+    Without clearing debounce state on relabel, a new person starting in the
+    same guard state the departed one left behind hits the
+    ``up_now == current_up`` short-circuit and never gets classified.
+    """
+    bus = EventBus()
+    events: list[GuardStateEvent] = []
+    bus.subscribe(GuardStateEvent, events.append)
+    engine = GuardEngine(bus, get_profile("boxing"), _CALIBRATION, GuardConfig())
+
+    for i in range(2 * _FPS):
+        engine.process(TrackedPose(fighter_id="A", pose=_pose(True, True), timestamp_s=i / _FPS))
+    assert len(events) == 2  # one initial "up" event per hand
+    events.clear()
+
+    engine._on_relabeled(FighterRelabeledEvent(timestamp_s=2.0, fighter_id="A"))
+
+    # The new "A" also happens to hold guard up.
+    for i in range(_FPS):
+        t = 2.0 + i / _FPS
+        engine.process(TrackedPose(fighter_id="A", pose=_pose(True, True), timestamp_s=t))
+    assert len(events) == 2
 
 
 def test_missing_face_keypoints_produce_no_events() -> None:

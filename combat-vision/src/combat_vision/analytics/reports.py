@@ -264,14 +264,16 @@ def _coaching_notes(summaries: Sequence[FighterSummary], duration_s: float) -> l
                 f"{who}: guard dropped {f.guard_drops} times this session — "
                 "make resetting your hands after every exchange automatic."
             )
-        if f.punch_candidates and f.rotation_faults / f.punch_candidates > 0.25:
+        hip_judged = f.clean_hip_turns + f.rotation_faults
+        if hip_judged and f.rotation_faults / hip_judged > 0.25:
             notes.append(
-                f"{who}: {f.rotation_faults} of {f.punch_candidates} punches had no hip "
+                f"{who}: {f.rotation_faults} of {hip_judged} judged punches had no hip "
                 "turn — you're throwing with your arm, not your hips."
             )
-        if f.punch_candidates and f.leg_drive_faults / f.punch_candidates > 0.25:
+        leg_judged = f.clean_leg_drives + f.leg_drive_faults
+        if leg_judged and f.leg_drive_faults / leg_judged > 0.25:
             notes.append(
-                f"{who}: {f.leg_drive_faults} of {f.punch_candidates} punches were thrown "
+                f"{who}: {f.leg_drive_faults} of {leg_judged} judged punches were thrown "
                 "with locked knees — stay bent so you can push off the floor."
             )
     return notes

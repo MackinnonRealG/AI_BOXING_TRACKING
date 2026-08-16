@@ -26,6 +26,9 @@ import numpy as np
 Point2D = tuple[float, float]
 Point3D = tuple[float, float, float]
 
+_DEGENERATE_W_TOLERANCE = 1e-9
+"""Below this, the SVD's unit-norm homogeneous w is "zero" for triangulation purposes."""
+
 
 @dataclass(frozen=True, slots=True)
 class CameraParams:
@@ -101,7 +104,12 @@ def triangulate(
     )
     _, _, vt = np.linalg.svd(design)
     homogeneous = vt[-1]
-    if homogeneous[3] == 0:
+    # vt's rows are unit-norm (SVD guarantees ||homogeneous|| == 1), so an
+    # absolute tolerance on the w component is meaningful here — not an
+    # arbitrary-scale value that would need to track the world coordinates.
+    # An exact `== 0` check would let near-parallel rays (w tiny but nonzero)
+    # through and divide out to a wild, meaningless coordinate.
+    if abs(homogeneous[3]) < _DEGENERATE_W_TOLERANCE:
         raise ValueError("triangulated point is at infinity — rays are parallel")
     world = homogeneous[:3] / homogeneous[3]
     return (float(world[0]), float(world[1]), float(world[2]))

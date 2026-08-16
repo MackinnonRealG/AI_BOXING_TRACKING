@@ -9,6 +9,7 @@ from combat_vision.engines.knee_bend import KneeBendEngine
 from combat_vision.events.bus import EventBus
 from combat_vision.events.types import (
     CleanTechniqueEvent,
+    FighterRelabeledEvent,
     Keypoint,
     KeypointName,
     KneeBendStateEvent,
@@ -70,6 +71,64 @@ def test_brief_lockout_is_debounced() -> None:
     frames += [(1.0 + 5 / _FPS + i / _FPS, False) for i in range(_FPS)]
     events = _run_posture(frames)
     assert all(not e.locked for e in events)
+
+
+def test_occlusion_does_not_let_a_stale_pending_transition_survive() -> None:
+    """A pending "about to lock" transition must not survive an occlusion gap
+    longer than the debounce interval — otherwise recovery falsely completes
+    the debounce using time spent with no data at all.
+    """
+    bus = EventBus()
+    events: list[KneeBendStateEvent] = []
+    bus.subscribe(KneeBendStateEvent, events.append)
+    engine = KneeBendEngine(bus, get_profile("boxing"), _CALIBRATION, KneeBendConfig())
+
+    t = 0.0
+    for _ in range(_FPS):  # 1s of bent -> current_locked settles to False
+        engine.process(TrackedPose(fighter_id="A", pose=_pose(False), timestamp_s=t))
+        t += 1 / _FPS
+    events.clear()
+
+    # One frame suggesting "about to lock" -- starts a pending candidacy.
+    engine.process(TrackedPose(fighter_id="A", pose=_pose(True), timestamp_s=t))
+    t += 1 / _FPS
+
+    # Occlusion lasting longer than lock_debounce_s (1.0s default).
+    missing_pose = _pose(True, missing=KeypointName.RIGHT_KNEE)
+    occlusion_end = t + KneeBendConfig().lock_debounce_s + 0.2
+    while t < occlusion_end:
+        engine.process(TrackedPose(fighter_id="A", pose=missing_pose, timestamp_s=t))
+        t += 1 / _FPS
+
+    # Keypoints return, still locked -- this must start a FRESH candidacy,
+    # not instantly satisfy the debounce using time spent with no data.
+    engine.process(TrackedPose(fighter_id="A", pose=_pose(True), timestamp_s=t))
+    assert events == []
+
+
+def test_relabel_clears_posture_state_so_the_new_person_gets_an_initial_event() -> None:
+    """Same reasoning as the guard engine's relabel test: a relabeled fighter
+    starting in the same posture the departed one left behind must still get
+    classified, not silently inherit stale state.
+    """
+    bus = EventBus()
+    events: list[KneeBendStateEvent] = []
+    bus.subscribe(KneeBendStateEvent, events.append)
+    engine = KneeBendEngine(bus, get_profile("boxing"), _CALIBRATION, KneeBendConfig())
+
+    t = 0.0
+    for _ in range(2 * _FPS):
+        engine.process(TrackedPose(fighter_id="A", pose=_pose(True), timestamp_s=t))
+        t += 1 / _FPS
+    assert len(events) == 1  # the initial "locked" event
+    events.clear()
+
+    engine._on_relabeled(FighterRelabeledEvent(timestamp_s=t, fighter_id="A"))
+
+    for _ in range(2 * _FPS):
+        engine.process(TrackedPose(fighter_id="A", pose=_pose(True), timestamp_s=t))
+        t += 1 / _FPS
+    assert len(events) == 1
 
 
 def test_missing_leg_keypoints_produce_no_posture_events() -> None:

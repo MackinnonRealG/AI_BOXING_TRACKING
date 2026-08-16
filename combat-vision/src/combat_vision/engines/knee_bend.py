@@ -37,6 +37,7 @@ from combat_vision.events.bus import EventBus
 from combat_vision.events.types import (
     CleanTechniqueEvent,
     FighterId,
+    FighterRelabeledEvent,
     KeypointName,
     KneeBendStateEvent,
     LegDriveFaultEvent,
@@ -83,12 +84,30 @@ class KneeBendEngine(MetricsEngine):
         )
         self._posture: dict[FighterId, _PostureState] = {}
         bus.subscribe(SpeedPeakEvent, self._on_candidate)
+        bus.subscribe(FighterRelabeledEvent, self._on_relabeled)
+
+    def _on_relabeled(self, event: FighterRelabeledEvent) -> None:
+        """Drop posture debounce state for a label now held by a different person.
+
+        Same reasoning as :meth:`engines.guard.GuardEngine._on_relabeled`: a
+        relabeled fighter starting in the same posture the departed one left
+        behind would never get an initial :class:`KneeBendStateEvent`.
+        """
+        self._posture.pop(event.fighter_id, None)
 
     def process(self, tracked: TrackedPose) -> None:
         """Buffer poses and advance the continuous locked-knee posture check."""
         self._buffers[tracked.fighter_id].append(tracked)
         angles = self._knee_angles(tracked.pose)
         if len(angles) < 2:
+            # Missing keypoints — not "back to whatever we were mid-transition
+            # to." Re-anchor the pending candidate to the last known state so
+            # occlusion time doesn't silently count toward the debounce clock
+            # once the keypoints come back.
+            state = self._posture.get(tracked.fighter_id)
+            if state is not None:
+                state.candidate_locked = state.current_locked
+                state.candidate_since_s = tracked.timestamp_s
             return
         locked = all(a >= self._config.locked_angle_deg for a in angles)
         self._update_posture(tracked.fighter_id, locked, tracked.timestamp_s)

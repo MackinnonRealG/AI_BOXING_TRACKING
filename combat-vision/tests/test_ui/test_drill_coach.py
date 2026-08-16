@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import pytest
+
 from combat_vision.drills import Drill, drills_for_profile
 from combat_vision.events.types import Limb, SpeedUnit, StrikeEvent, StrikeType
 from combat_vision.sports import get_profile
@@ -115,3 +117,23 @@ def test_drills_for_profile_allows_all_built_in_drills_in_kickboxing() -> None:
 
     kickboxing_drills = drills_for_profile(get_profile("kickboxing"))
     assert len(kickboxing_drills) == len(DEFAULT_DRILLS)
+
+
+def test_drills_for_profile_actually_filters_by_strike_type(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The built-in drills all happen to be hand-only, so the two tests above
+    would pass even if drills_for_profile() didn't filter at all. Inject a
+    kick drill to prove profile.allows() is actually being consulted.
+    """
+    import combat_vision.drills as drills_module
+
+    kick_drill = Drill("Front-Kick-Only", (StrikeType.FRONT_KICK,))
+    patched = (*drills_module.DEFAULT_DRILLS, kick_drill)
+    monkeypatch.setattr(drills_module, "DEFAULT_DRILLS", patched)
+
+    boxing_drills = drills_for_profile(get_profile("boxing"))
+    kickboxing_drills = drills_for_profile(get_profile("kickboxing"))
+
+    assert kick_drill not in boxing_drills
+    assert kick_drill in kickboxing_drills
