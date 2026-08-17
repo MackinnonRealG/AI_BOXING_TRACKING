@@ -1,8 +1,8 @@
 # First real-camera test
 
 Everything in this project has been verified against synthetic pose fixtures
-and unit tests (~194 of them) — never against a real human in front of a real
-camera. That's the single highest-priority gap right now: no amount of
+and unit tests — never against a real human in front of a real camera.
+That's the single highest-priority gap right now: no amount of
 additional heuristic tuning matters until we know where the real gap between
 "passes the test suite" and "actually works" is.
 

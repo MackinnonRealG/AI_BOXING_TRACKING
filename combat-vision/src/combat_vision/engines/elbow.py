@@ -87,21 +87,37 @@ class ElbowEngine(MetricsEngine):
     def process(self, tracked: TrackedPose) -> None:
         """Classify this frame's elbow-tuck state and run the debounce machine."""
         reference = self._centerline_and_half_width(tracked)
-        if reference is None:
+        if reference is None or reference[1] <= 0:
+            # Degenerate/missing frame: a stale candidate_since_s must not
+            # let the gap itself satisfy the debounce interval once a real
+            # measurement resumes.
+            for arm in _ELBOW_KEYPOINT:
+                self._mark_gap(tracked.fighter_id, arm)
             return
         centerline_x, half_width = reference
-        if half_width <= 0:
-            return  # degenerate frame (shoulders collapsed to one point)
 
         for arm, keypoint_name in _ELBOW_KEYPOINT.items():
             if arm not in self._profile.striking_limbs:
                 continue
             elbow = tracked.pose.get(keypoint_name)
             if elbow is None:
+                self._mark_gap(tracked.fighter_id, arm)
                 continue
             offset_ratio = abs(elbow.x - centerline_x) / half_width
             tucked = offset_ratio <= self._config.flare_ratio
             self._update(tracked.fighter_id, arm, tucked, tracked.timestamp_s)
+
+    def _mark_gap(self, fighter_id: FighterId, arm: Limb) -> None:
+        """Re-anchor debounce after a measurement gap for one fighter's arm.
+
+        Clearing ``candidate_tucked`` (rather than leaving it stale) makes
+        the next real measurement look like a fresh first observation, so
+        ``_update`` restarts ``candidate_since_s`` instead of computing
+        elapsed time across the gap.
+        """
+        state = self._elbows.get((fighter_id, arm))
+        if state is not None:
+            state.candidate_tucked = None
 
     def _centerline_and_half_width(self, tracked: TrackedPose) -> tuple[float, float] | None:
         """Torso centerline x and half shoulder width, or None if unknown."""

@@ -104,6 +104,54 @@ def test_missing_shoulder_keypoints_produce_no_events() -> None:
     assert events == []
 
 
+def test_keypoint_gap_does_not_let_elapsed_time_satisfy_the_debounce() -> None:
+    """A candidate flare must restart its debounce clock after a tracking gap.
+
+    Without re-anchoring on the gap, a flare that starts, then loses the
+    elbow keypoint for longer than flare_debounce_s, then reappears flared
+    for a single frame would compute elapsed time across the whole gap and
+    fire immediately -- one recovered frame is not a sustained flare.
+    """
+    bus = EventBus()
+    events: list[ElbowStateEvent] = []
+    bus.subscribe(ElbowStateEvent, events.append)
+    engine = ElbowEngine(bus, get_profile("boxing"), _CALIBRATION, ElbowConfig())
+    config = ElbowConfig()
+    t = 0.0
+
+    # Establish a confirmed "tucked" baseline.
+    for _ in range(_FPS):
+        engine.process(TrackedPose(fighter_id="A", pose=_pose(True, True), timestamp_s=t))
+        t += 1 / _FPS
+    events.clear()
+
+    # Flare begins but is not held long enough to confirm.
+    for _ in range(10):
+        engine.process(TrackedPose(fighter_id="A", pose=_pose(False, True), timestamp_s=t))
+        t += 1 / _FPS
+    assert events == []
+
+    # Tracking gap on the left elbow, well past flare_debounce_s.
+    gap_frames = int((config.flare_debounce_s + 0.2) * _FPS)
+    for _ in range(gap_frames):
+        pose = _pose(False, True, missing=KeypointName.LEFT_ELBOW)
+        engine.process(TrackedPose(fighter_id="A", pose=pose, timestamp_s=t))
+        t += 1 / _FPS
+    assert events == []
+
+    # One recovered flared frame must not immediately fire.
+    engine.process(TrackedPose(fighter_id="A", pose=_pose(False, True), timestamp_s=t))
+    t += 1 / _FPS
+    assert events == []
+
+    # Only after a fresh full debounce interval does the fault confirm.
+    for _ in range(int(config.flare_debounce_s * _FPS) + 2):
+        engine.process(TrackedPose(fighter_id="A", pose=_pose(False, True), timestamp_s=t))
+        t += 1 / _FPS
+    flares = [e for e in events if e.elbow == Limb.LEFT_HAND and not e.tucked]
+    assert len(flares) == 1
+
+
 def test_relabel_clears_debounce_state_so_the_new_person_gets_an_initial_event() -> None:
     bus = EventBus()
     events: list[ElbowStateEvent] = []

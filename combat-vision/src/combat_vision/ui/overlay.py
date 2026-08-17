@@ -201,7 +201,7 @@ class LiveOverlay:
     def _on_balance_fault(self, event: BalanceFaultEvent) -> None:
         self._add_fault_note(
             event.fighter_id,
-            f"that {event.limb.value.replace('_', ' ')} wobbled on your base leg — "
+            f"your base leg wobbled during that {event.limb.value.replace('_', ' ')} — "
             "stay grounded on the standing foot!",
         )
 

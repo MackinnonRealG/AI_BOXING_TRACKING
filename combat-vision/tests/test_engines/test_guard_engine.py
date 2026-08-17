@@ -80,6 +80,49 @@ def test_brief_dip_is_debounced() -> None:
     assert all(e.guard_up for e in events)
 
 
+def test_keypoint_gap_does_not_let_elapsed_time_satisfy_the_debounce() -> None:
+    """A candidate guard drop must restart its debounce clock after a gap.
+
+    Mirrors the same fix in engines.elbow: without re-anchoring on the gap,
+    a drop that starts, then loses the nose/shoulder reference for longer
+    than drop_debounce_s, then reappears down for a single frame would
+    compute elapsed time across the whole gap and fire immediately.
+    """
+    bus = EventBus()
+    events: list[GuardStateEvent] = []
+    bus.subscribe(GuardStateEvent, events.append)
+    engine = GuardEngine(bus, get_profile("boxing"), _CALIBRATION, GuardConfig())
+    config = GuardConfig()
+    t = 0.0
+
+    for _ in range(_FPS):
+        engine.process(TrackedPose(fighter_id="A", pose=_pose(True, True), timestamp_s=t))
+        t += 1 / _FPS
+    events.clear()
+
+    for _ in range(10):
+        engine.process(TrackedPose(fighter_id="A", pose=_pose(False, True), timestamp_s=t))
+        t += 1 / _FPS
+    assert events == []
+
+    gap_frames = int((config.drop_debounce_s + 0.2) * _FPS)
+    for _ in range(gap_frames):
+        pose = _pose(False, True, missing=KeypointName.NOSE)
+        engine.process(TrackedPose(fighter_id="A", pose=pose, timestamp_s=t))
+        t += 1 / _FPS
+    assert events == []
+
+    engine.process(TrackedPose(fighter_id="A", pose=_pose(False, True), timestamp_s=t))
+    t += 1 / _FPS
+    assert events == []
+
+    for _ in range(int(config.drop_debounce_s * _FPS) + 2):
+        engine.process(TrackedPose(fighter_id="A", pose=_pose(False, True), timestamp_s=t))
+        t += 1 / _FPS
+    drops = [e for e in events if e.hand == Limb.LEFT_HAND and not e.guard_up]
+    assert len(drops) == 1
+
+
 def test_relabel_clears_debounce_state_so_the_new_person_gets_an_initial_event() -> None:
     """A relabeled fighter must get their own initial event, not go silent.
 

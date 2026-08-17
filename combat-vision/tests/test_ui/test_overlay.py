@@ -267,14 +267,19 @@ def test_leg_drive_fault_appears_in_guidance() -> None:
 
 
 def test_balance_fault_appears_in_guidance() -> None:
-    """A wobbly-base kick surfaces the same way a leg-drive fault does."""
+    """A wobbly-base kick surfaces the same way a leg-drive fault does.
+
+    ``BalanceFaultEvent.limb`` is the *striking* limb (see kick_balance.py),
+    not the base leg that actually wobbled — the cue text must say the base
+    leg wobbled during that strike, not that the strike itself wobbled.
+    """
     overlay, bus = _overlay()
     bus.publish(
         BalanceFaultEvent(timestamp_s=1.0, fighter_id="A", limb=Limb.LEFT_FOOT, wobble_ratio=0.8)
     )
     message = overlay._guidance([_visible_pose("A")])
     assert message is not None
-    assert "wobbled" in message.lower()
+    assert "your base leg wobbled during that left foot" in message.lower()
 
 
 def test_toggle_drill_starts_and_stops_via_the_d_key() -> None:

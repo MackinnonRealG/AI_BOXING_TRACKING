@@ -87,14 +87,26 @@ class GuardEngine(MetricsEngine):
         """Classify this frame's guard line and run the debounce state machine."""
         line_y = self._guard_line_y(tracked)
         if line_y is None:
+            # A stale candidate_since_s must not let the gap itself satisfy
+            # the debounce interval once a real measurement resumes (mirrors
+            # engines.elbow.ElbowEngine._mark_gap).
+            for hand in _HAND_KEYPOINT:
+                self._mark_gap(tracked.fighter_id, hand)
             return
         for hand, keypoint_name in _HAND_KEYPOINT.items():
             if hand not in self._profile.striking_limbs:
                 continue
             wrist = tracked.pose.get(keypoint_name)
             if wrist is None:
+                self._mark_gap(tracked.fighter_id, hand)
                 continue
             self._update(tracked.fighter_id, hand, wrist.y <= line_y, tracked.timestamp_s)
+
+    def _mark_gap(self, fighter_id: FighterId, hand: Limb) -> None:
+        """Re-anchor debounce after a measurement gap for one fighter's hand."""
+        state = self._hands.get((fighter_id, hand))
+        if state is not None:
+            state.candidate_up = None
 
     def _guard_line_y(self, tracked: TrackedPose) -> float | None:
         """Normalized y at/above which a hand counts as guarding, or None if unknown."""
