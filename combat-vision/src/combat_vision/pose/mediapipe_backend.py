@@ -9,6 +9,8 @@ local cache on first use.
 from __future__ import annotations
 
 import logging
+import os
+import tempfile
 import urllib.request
 from pathlib import Path
 from typing import Any
@@ -17,6 +19,7 @@ import cv2
 
 from combat_vision.capture.base import TimestampedFrame
 from combat_vision.events.types import BBox, Keypoint, KeypointName, PersonDetection, Pose
+from combat_vision.pose import appearance
 from combat_vision.pose.base import PoseBackend
 
 logger = logging.getLogger(__name__)
@@ -24,6 +27,10 @@ logger = logging.getLogger(__name__)
 # MediaPipe landmark index -> canonical name (subset we consume).
 _MP_TO_CANONICAL: dict[int, KeypointName] = {
     0: KeypointName.NOSE,
+    2: KeypointName.LEFT_EYE,
+    5: KeypointName.RIGHT_EYE,
+    7: KeypointName.LEFT_EAR,
+    8: KeypointName.RIGHT_EAR,
     11: KeypointName.LEFT_SHOULDER,
     12: KeypointName.RIGHT_SHOULDER,
     13: KeypointName.LEFT_ELBOW,
@@ -57,14 +64,34 @@ def _model_cache_dir() -> Path:
 
 
 def ensure_model(variant: str) -> Path:
-    """Return the local path of the landmarker model, downloading if absent."""
+    """Return the local path of the landmarker model, downloading if absent.
+
+    Downloads to a uniquely-named ``.part`` sibling and renames it into place
+    only after a full, successful transfer. A network failure/interruption
+    mid-download otherwise leaves a truncated file sitting at the final path;
+    since the only freshness check is ``path.exists()``, every future run
+    would silently hand that corrupt file to PoseLandmarker instead of
+    retrying. The temp name is unique per call (not just per variant) so two
+    concurrent invocations downloading the same variant never share one
+    `.part` file and race each other's rename/cleanup.
+    """
     if variant not in _MODEL_URLS:
         raise ValueError(f"unknown model variant {variant!r}; choose from {sorted(_MODEL_URLS)}")
     path = _model_cache_dir() / f"pose_landmarker_{variant}.task"
     if not path.exists():
         path.parent.mkdir(parents=True, exist_ok=True)
+        fd, tmp_name = tempfile.mkstemp(
+            dir=path.parent, prefix=f".{path.name}.", suffix=".part"
+        )
+        os.close(fd)
+        tmp_path = Path(tmp_name)
         logger.info("downloading pose model %s -> %s", variant, path)
-        urllib.request.urlretrieve(_MODEL_URLS[variant], path)  # noqa: S310 — fixed https host
+        try:
+            urllib.request.urlretrieve(_MODEL_URLS[variant], tmp_path)  # noqa: S310 — fixed https host
+            tmp_path.replace(path)
+        except BaseException:
+            tmp_path.unlink(missing_ok=True)
+            raise
     return path
 
 
@@ -117,11 +144,13 @@ class MediaPipePoseBackend(PoseBackend):
                 keypoints[name] = Keypoint(x=lm.x, y=lm.y, z=lm.z, visibility=visibility)
             xs = [k.x for k in keypoints.values()]
             ys = [k.y for k in keypoints.values()]
+            bbox = BBox(x_min=min(xs), y_min=min(ys), x_max=max(xs), y_max=max(ys))
             detections.append(
                 PersonDetection(
                     pose=Pose(keypoints=keypoints),
-                    bbox=BBox(x_min=min(xs), y_min=min(ys), x_max=max(xs), y_max=max(ys)),
+                    bbox=bbox,
                     score=sum(k.visibility for k in keypoints.values()) / len(keypoints),
+                    appearance=appearance.histogram(frame.image, bbox),
                 )
             )
         return detections

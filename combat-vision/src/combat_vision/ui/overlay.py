@@ -8,6 +8,9 @@ Keys (all shown on screen):
     ``r`` start/end round     ``c`` click-two-points calibration
     ``h`` foot heat map       ``m`` mirror view
     ``f`` fullscreen          ``t`` tracker backend toggle
+    ``s`` toggle boxing/kickboxing — switches which strikes/faults every
+          engine monitors immediately, no restart
+    ``d`` start/stop a guided drill for fighter A (cycles through combos)
     ``q`` quit (the session is saved and reported by the caller)
 """
 
@@ -22,18 +25,29 @@ import numpy as np
 
 from combat_vision.calibration import Calibration
 from combat_vision.capture.base import TimestampedFrame
+from combat_vision.drills import Drill, drills_for_profile
 from combat_vision.events.bus import EventBus
 from combat_vision.events.types import (
     SKELETON_EDGES,
+    BalanceFaultEvent,
+    ElbowStateEvent,
+    FighterRelabeledEvent,
+    GuardStateEvent,
     KeypointName,
+    KneeBendStateEvent,
+    LegDriveFaultEvent,
+    Limb,
     PowerEstimateEvent,
+    RotationFaultEvent,
     SpeedPeakEvent,
     StanceSample,
     StepEvent,
     StrikeEvent,
     TrackedPose,
 )
+from combat_vision.sports.switchable import SwitchableSportProfile
 from combat_vision.tracking import SwitchableTracker
+from combat_vision.ui.drill_coach import DrillCoach
 from combat_vision.utils import geometry
 from combat_vision.utils.config import UiConfig
 
@@ -56,6 +70,7 @@ _LIMBS_FOR_GUIDANCE = (
 _FONT = cv2.FONT_HERSHEY_SIMPLEX
 _LINE_H = 24
 _FIGHTER_STALE_S = 1.0  # hide a fighter card this long after they leave frame
+_FAULT_NOTE_DURATION_S = 2.0  # how long a per-rep fault cue (e.g. rotation) stays on screen
 
 
 @dataclass
@@ -69,6 +84,10 @@ class _FighterHud:
     candidates: int = 0
     steps: int = 0
     stance: str = "?"
+    guard_up: dict[Limb, bool] = field(default_factory=dict)
+    elbow_tucked: dict[Limb, bool] = field(default_factory=dict)
+    knees_locked: bool | None = None
+    fault_notes: list[tuple[str, float]] = field(default_factory=list)
     last_seen_s: float = -1.0e9
 
 
@@ -81,13 +100,13 @@ class LiveOverlay:
         config: UiConfig,
         tracker: SwitchableTracker | None = None,
         calibration: Calibration | None = None,
-        sport: str = "",
+        sport_profile: SwitchableSportProfile | None = None,
         names: dict[str, str] | None = None,
     ) -> None:
         self._config = config
         self._tracker = tracker
         self._calibration = calibration
-        self._sport = sport
+        self._sport_profile = sport_profile
         self._names = names or {}
 
         self._show_heatmap = False
@@ -112,11 +131,23 @@ class LiveOverlay:
         self._cal_points: list[tuple[int, int]] = []
         self._cal_buffer = ""
 
+        self._drills: tuple[Drill, ...] = ()
+        self._refresh_drills()
+        self._drill_index = 0
+        self._drill_coach = DrillCoach()
+
         bus.subscribe(SpeedPeakEvent, self._on_speed_peak)
         bus.subscribe(StrikeEvent, self._on_strike)
         bus.subscribe(PowerEstimateEvent, self._on_power)
         bus.subscribe(StanceSample, self._on_stance)
         bus.subscribe(StepEvent, self._on_step)
+        bus.subscribe(GuardStateEvent, self._on_guard)
+        bus.subscribe(ElbowStateEvent, self._on_elbow)
+        bus.subscribe(RotationFaultEvent, self._on_rotation_fault)
+        bus.subscribe(KneeBendStateEvent, self._on_knee_bend)
+        bus.subscribe(LegDriveFaultEvent, self._on_leg_drive_fault)
+        bus.subscribe(BalanceFaultEvent, self._on_balance_fault)
+        bus.subscribe(FighterRelabeledEvent, self._on_relabeled)
 
     def _display_name(self, fighter_id: str) -> str:
         """The fighter's given name, or 'Fighter <label>' when unnamed."""
@@ -134,6 +165,7 @@ class LiveOverlay:
         hud.last_strike = event
         hud.strike_counts[event.strike_type.value] += 1
         self._toasts.append((event, time.monotonic()))
+        self._drill_coach.on_strike(event)
 
     def _on_power(self, event: PowerEstimateEvent) -> None:
         self._fighters[event.fighter_id].last_power = event
@@ -144,12 +176,70 @@ class LiveOverlay:
     def _on_step(self, event: StepEvent) -> None:
         self._fighters[event.fighter_id].steps += 1
 
+    def _on_guard(self, event: GuardStateEvent) -> None:
+        self._fighters[event.fighter_id].guard_up[event.hand] = event.guard_up
+
+    def _on_elbow(self, event: ElbowStateEvent) -> None:
+        self._fighters[event.fighter_id].elbow_tucked[event.elbow] = event.tucked
+
+    def _on_rotation_fault(self, event: RotationFaultEvent) -> None:
+        self._add_fault_note(
+            event.fighter_id,
+            f"that {event.limb.value.replace('_', ' ')} was all arm — turn your hips!",
+        )
+
+    def _on_knee_bend(self, event: KneeBendStateEvent) -> None:
+        self._fighters[event.fighter_id].knees_locked = event.locked
+
+    def _on_leg_drive_fault(self, event: LegDriveFaultEvent) -> None:
+        self._add_fault_note(
+            event.fighter_id,
+            f"that {event.limb.value.replace('_', ' ')} had no leg drive — "
+            "bend your knees and push!",
+        )
+
+    def _on_balance_fault(self, event: BalanceFaultEvent) -> None:
+        self._add_fault_note(
+            event.fighter_id,
+            f"your base leg wobbled during that {event.limb.value.replace('_', ' ')} — "
+            "stay grounded on the standing foot!",
+        )
+
+    def _add_fault_note(self, fighter_id: str, message: str) -> None:
+        """Queue a transient per-rep coaching cue, replacing any prior one."""
+        self._fighters[fighter_id].fault_notes = [(message, time.monotonic())]
+
+    def _on_relabeled(self, event: FighterRelabeledEvent) -> None:
+        """Drop everything accumulated under a label now held by someone else.
+
+        Counts, stance, last strike/power and the foot heat map are all derived
+        from the *previous* person's frames; carrying them over would credit
+        their punches, steps and footwork to whoever just walked into the slot.
+        Pending toasts are dropped for the same reason — they would otherwise
+        pop the departed fighter's last strike over the new fighter's head.
+
+        The entries are deleted rather than zeroed: both containers are
+        ``defaultdict`` s, so the next event or rendered frame recreates them
+        clean, and a fighter who never returns stops occupying memory.
+
+        ``self._names`` is deliberately left alone. It is operator-supplied
+        configuration for the *label* ("slot A is Dana"), not state derived
+        from the video, so this code is not the right place to decide it has
+        become wrong.
+        """
+        self._fighters.pop(event.fighter_id, None)
+        self._foot_heat.pop(event.fighter_id, None)
+        self._toasts = [t for t in self._toasts if t[0].fighter_id != event.fighter_id]
+        if self._drill_coach.fighter_id == event.fighter_id:
+            self._drill_coach.stop()  # the drill was targeting whoever just left
+
     # -- main entry --------------------------------------------------------
 
     def render(self, frame: TimestampedFrame, poses: list[TrackedPose]) -> bool:
         """Draw one frame; return False when the user quits."""
         self._now_s = frame.timestamp_s
         self._render_times.append(time.monotonic())
+        self._drill_coach.tick(frame.timestamp_s)
         image = cv2.flip(frame.image, 1) if self._mirror else frame.image
         h, w = image.shape[:2]
         self._ensure_window(w, h)
@@ -215,9 +305,56 @@ class LiveOverlay:
             self._cal_mode = "picking"
             self._cal_points = []
             self._cal_buffer = ""
+        elif key == ord("d"):
+            self._toggle_drill()
+        elif key == ord("s") and self._sport_profile is not None:
+            self._toggle_sport()
         elif key == 27 and self._cal_mode != "off":  # esc cancels calibration
             self._cal_mode = "off"
         return True
+
+    def _toggle_sport(self) -> None:
+        """Flip between boxing and kickboxing, live.
+
+        Every engine holds the same :class:`SwitchableSportProfile` instance
+        and reads its properties at use-time, so this takes effect starting
+        on the next frame — no pipeline rebuild. Kickboxing is a strict
+        superset of boxing's strike types here, so this is one toggle
+        between two modes, not two independent switches: there's no
+        meaningful state where "both on" or "both off" means anything.
+        """
+        assert self._sport_profile is not None
+        other = "kickboxing" if self._sport_profile.name == "boxing" else "boxing"
+        self._sport_profile.switch(other)
+        self._refresh_drills()
+        self._drill_coach.stop()  # the old drill list may not exist in the new sport
+
+    def _refresh_drills(self) -> None:
+        """Recompute the drill list for whichever sport is now active."""
+        self._drills = drills_for_profile(self._sport_profile) if self._sport_profile else ()
+
+    def _toggle_drill(self) -> None:
+        """Stop the running drill, or start the next one in rotation.
+
+        Targets whichever single fighter is currently in frame — solo
+        training shouldn't silently target label "A" if you happen to be
+        tracked as "B" today. With both (or neither) fighter present, falls
+        back to "A".
+        """
+        if self._drill_coach.active:
+            self._drill_coach.stop()
+            return
+        if not self._drills:
+            return
+        visible = [
+            fid
+            for fid, hud in self._fighters.items()
+            if self._now_s - hud.last_seen_s <= _FIGHTER_STALE_S
+        ]
+        target = visible[0] if len(visible) == 1 else "A"
+        drill = self._drills[self._drill_index % len(self._drills)]
+        self._drill_index += 1
+        self._drill_coach.start(drill, fighter_id=target, now_s=self._now_s)
 
     def _toggle_round(self) -> None:
         if self._round_open:
@@ -297,13 +434,14 @@ class LiveOverlay:
         else:
             units = "units: px/s — [c] calibrate"
         tracker = f"tracker: {self._tracker.active_name}" if self._tracker else ""
+        sport = self._sport_profile.name.upper() if self._sport_profile else "?"
         line1 = (
-            f"{self._sport.upper()}  |  {_clock(self._now_s)}  |  {round_text}  |  "
+            f"{sport}  |  {_clock(self._now_s)}  |  {round_text}  |  "
             f"{fps:.0f} FPS  |  {tracker}  |  {units}"
         )
         line2 = (
-            "[r] round  [c] calibrate  [h] heatmap  [m] mirror  "
-            "[f] fullscreen  [t] tracker  [q] quit+save"
+            "[r] round  [c] calibrate  [h] heatmap  [m] mirror  [f] fullscreen  "
+            "[t] tracker  [s] sport  [d] drill  [q] quit+save"
         )
         self._text_block(image, [line1, line2], 10, 8, width=w - 20)
 
@@ -326,7 +464,60 @@ class LiveOverlay:
                     f"Fighter {tracked.fighter_id}: hands/feet not visible — "
                     "step back until your whole body is in frame"
                 )
+        drill_prompt = self._drill_coach.prompt(self._now_s)
+        if drill_prompt is not None:
+            return drill_prompt
+        for tracked in poses:
+            note = self._fresh_fault_note(tracked.fighter_id)
+            if note is not None:
+                return note
+        for tracked in poses:
+            dropped = self._dropped_hand(tracked.fighter_id)
+            if dropped is not None:
+                return (
+                    f"Fighter {tracked.fighter_id}: {dropped.value.replace('_', ' ')} "
+                    "dropping — keep your guard up!"
+                )
+        for tracked in poses:
+            flared = self._flared_elbow(tracked.fighter_id)
+            if flared is not None:
+                return (
+                    f"Fighter {tracked.fighter_id}: {flared.value.replace('_', ' ')} elbow "
+                    "flared out — tuck it back to your ribs"
+                )
+        for tracked in poses:
+            if self._fighters[tracked.fighter_id].knees_locked:
+                return (
+                    f"Fighter {tracked.fighter_id}: knees locked out — "
+                    "stay loose, bend your knees"
+                )
         return None
+
+    def _dropped_hand(self, fighter_id: str) -> Limb | None:
+        """The first hand currently flagged guard-down for this fighter, if any."""
+        guard = self._fighters[fighter_id].guard_up
+        for hand in (Limb.LEFT_HAND, Limb.RIGHT_HAND):
+            if guard.get(hand) is False:
+                return hand
+        return None
+
+    def _flared_elbow(self, fighter_id: str) -> Limb | None:
+        """The first arm currently flagged elbow-flared for this fighter, if any."""
+        elbows = self._fighters[fighter_id].elbow_tucked
+        for arm in (Limb.LEFT_HAND, Limb.RIGHT_HAND):
+            if elbows.get(arm) is False:
+                return arm
+        return None
+
+    def _fresh_fault_note(self, fighter_id: str) -> str | None:
+        """The most recent per-rep fault cue for this fighter, or None once it expires."""
+        notes = self._fighters[fighter_id].fault_notes
+        if not notes:
+            return None
+        message, seen_at = notes[-1]
+        if time.monotonic() - seen_at > _FAULT_NOTE_DURATION_S:
+            return None
+        return f"Fighter {fighter_id}: {message}"
 
     def _draw_fighter_cards(self, image: np.ndarray, w: int, h: int) -> None:
         active = sorted(
@@ -339,7 +530,7 @@ class LiveOverlay:
             hud = self._fighters[fighter_id]
             color = _FIGHTER_COLORS.get(fighter_id, _NEUTRAL)
             x = 10 if fighter_id == "A" or len(active) == 1 else w - card_w - 10
-            y = h - 5 * _LINE_H - 26
+            y = h - 6 * _LINE_H - 26
 
             if hud.last_strike is not None:
                 strike = hud.last_strike
@@ -357,12 +548,38 @@ class LiveOverlay:
             top = hud.strike_counts.most_common(3)
             counts_line = "  ".join(f"{name} x{count}" for name, count in top) or "no strikes yet"
             lines = [
-                f"{self._display_name(fighter_id).upper()} ({fighter_id})   stance: {hud.stance}",
+                f"{self._display_name(fighter_id).upper()} ({fighter_id})   "
+                f"stance: {hud.stance}",
+                f"{self._guard_text(hud)}   {self._elbow_text(hud)}   {self._knee_text(hud)}",
                 last_line,
                 f"punches: {hud.candidates}   steps: {hud.steps}",
                 counts_line,
             ]
             self._text_block(image, lines, x, y, width=card_w, title_color=color)
+
+    def _guard_text(self, hud: _FighterHud) -> str:
+        """Compact per-hand guard indicator, e.g. 'guard: L^ Rv'."""
+        parts = [
+            f"{label}{'^' if hud.guard_up[hand] else 'v'}"
+            for hand, label in ((Limb.LEFT_HAND, "L"), (Limb.RIGHT_HAND, "R"))
+            if hand in hud.guard_up
+        ]
+        return "guard: " + " ".join(parts) if parts else "guard: --"
+
+    def _elbow_text(self, hud: _FighterHud) -> str:
+        """Compact per-arm elbow-tuck indicator, e.g. 'elbows: L< R>'."""
+        parts = [
+            f"{label}{'<' if hud.elbow_tucked[arm] else '>'}"
+            for arm, label in ((Limb.LEFT_HAND, "L"), (Limb.RIGHT_HAND, "R"))
+            if arm in hud.elbow_tucked
+        ]
+        return "elbows: " + " ".join(parts) if parts else "elbows: --"
+
+    def _knee_text(self, hud: _FighterHud) -> str:
+        """Compact knee-posture indicator: 'knees: bent', 'locked', or unknown."""
+        if hud.knees_locked is None:
+            return "knees: --"
+        return "knees: locked" if hud.knees_locked else "knees: bent"
 
     def _draw_toasts(
         self, image: np.ndarray, poses: list[TrackedPose], w: int, h: int

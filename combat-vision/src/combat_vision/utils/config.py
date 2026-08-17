@@ -111,6 +111,60 @@ class StanceConfig(BaseModel):
     square_width_ratio: float = 0.5  # ankle x-separation under ratio*shoulder width = square
 
 
+class RotationEngineConfig(BaseModel):
+    """Hip-shoulder rotation ("power source") fault detection thresholds."""
+
+    min_shoulder_rotation_deg: float = 15.0  # below this, shoulder turn is too small to judge
+    min_hip_ratio: float = 0.5  # hip rotation below this fraction of shoulder rotation = fault
+
+
+class KneeBendConfig(BaseModel):
+    """Locked-knee posture and no-leg-drive fault thresholds."""
+
+    locked_angle_deg: float = 165.0  # knee angle at/above this counts as "locked"
+    lock_debounce_s: float = 1.0     # both knees must stay locked this long to flag posture
+    bend_debounce_s: float = 0.15    # recovery debounce, mirrors guard.py's pattern
+
+
+class KickBalanceConfig(BaseModel):
+    """Base-leg balance fault thresholds for kicks/knee strikes."""
+
+    wobble_ratio: float = 0.5  # base ankle horizontal range / hip width, above which = wobble
+
+
+class DepthPostureConfig(BaseModel):
+    """Approximate elbow-flare / torso-lean sampling (unitless MediaPipe z)."""
+
+    sample_interval_s: float = 0.2  # DepthPostureSample decimation, mirrors footwork
+
+
+class HeadPostureConfig(BaseModel):
+    """Head-roll and head-movement measurement sampling."""
+
+    sample_interval_s: float = 0.2  # HeadPostureSample decimation, mirrors footwork
+    movement_window_s: float = 2.0  # trailing window over which lateral movement is measured
+
+
+class ElbowConfig(BaseModel):
+    """Elbow-tuck fault detection thresholds."""
+
+    flare_ratio: float = 1.7  # elbow horizontal offset from torso centerline / half shoulder
+    # width, above which counts as flared. ~1.0-1.3 is roughly "elbow at the shoulder line"
+    # (a normal tucked guard); this default is a starting point, not calibrated against real
+    # footage — expect to tune it once you've actually recorded yourself.
+    flare_debounce_s: float = 0.6  # elbow must be flared this long before flagging
+    tuck_debounce_s: float = 0.15  # elbow must be tucked this long before clearing
+
+
+class GuardConfig(BaseModel):
+    """Guard-height fault detection: how close each hand must stay to the chin."""
+
+    chin_ratio: float = 0.35        # chin position between nose (0) and shoulder line (1)
+    drop_margin_ratio: float = 0.25  # extra tolerance below the chin line still read as "up"
+    drop_debounce_s: float = 0.6     # hand must be below the line this long before flagging
+    recover_debounce_s: float = 0.15  # hand must be above the line this long before clearing
+
+
 class DistanceEngineConfig(BaseModel):
     """Inter-fighter distance sampling."""
 
@@ -133,6 +187,13 @@ class EnginesConfig(BaseModel):
     strike_classifier: StrikeClassifierConfig = StrikeClassifierConfig()
     footwork: FootworkConfig = FootworkConfig()
     stance: StanceConfig = StanceConfig()
+    guard: GuardConfig = GuardConfig()
+    elbow: ElbowConfig = ElbowConfig()
+    rotation: RotationEngineConfig = RotationEngineConfig()
+    knee_bend: KneeBendConfig = KneeBendConfig()
+    kick_balance: KickBalanceConfig = KickBalanceConfig()
+    head_posture: HeadPostureConfig = HeadPostureConfig()
+    depth_posture: DepthPostureConfig = DepthPostureConfig()
     distance: DistanceEngineConfig = DistanceEngineConfig()
     combination: CombinationConfig = CombinationConfig()
 

@@ -82,12 +82,20 @@ class Calibration:
 def multi_camera_fusion_stub() -> None:
     """Placeholder for future multi-camera calibration and fusion.
 
+    The triangulation math this needs — recovering a 3D point from two
+    calibrated cameras' 2D observations — already exists and is tested:
+    see :mod:`combat_vision.calibration.triangulation`. What's still
+    missing, and needs physical cameras to build and validate, not just
+    code:
+
     TODO:
-        * Per-camera intrinsics (checkerboard) + extrinsics from shared
-          ring-corner references.
-        * Triangulate keypoints visible from 2+ cameras into 3D, falling back
-          to single-view 2D per fighter otherwise.
-        * Feed fused 3D poses through the same TrackedPose contract with
+        * Per-camera intrinsics from real checkerboard captures (populating
+          :class:`~combat_vision.calibration.triangulation.CameraParams`).
+        * Extrinsics from shared ring-corner references.
+        * Synchronized dual-camera capture in the pipeline, and fusing each
+          keypoint visible from 2+ cameras via ``triangulate()``, falling
+          back to single-view 2D per fighter otherwise.
+        * Feeding fused 3D poses through the same TrackedPose contract with
           true metric coordinates (calibration then becomes identity).
     """
     raise NotImplementedError("multi-camera fusion is a roadmap module")

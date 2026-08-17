@@ -3,7 +3,8 @@
 Natively multi-person, GPU-friendly — the intended production backend for
 crowded frames. Emits 17 COCO keypoints (no heels/foot-index), so
 foot-dependent engines degrade gracefully to ankle-only data, which the
-canonical contract already allows.
+canonical contract already allows. COCO does include eyes/ears, unlike the
+old canonical set — they're mapped below alongside everything else COCO has.
 
 Requires the optional dependency: ``pip install "combat-vision[yolo]"``
 (pulls in ``ultralytics`` and PyTorch).
@@ -15,11 +16,16 @@ from typing import Any
 
 from combat_vision.capture.base import TimestampedFrame
 from combat_vision.events.types import BBox, Keypoint, KeypointName, PersonDetection, Pose
+from combat_vision.pose import appearance
 from combat_vision.pose.base import PoseBackend
 
-# COCO keypoint index -> canonical name (eyes/ears deliberately dropped).
+# COCO keypoint index -> canonical name.
 _COCO_TO_CANONICAL: dict[int, KeypointName] = {
     0: KeypointName.NOSE,
+    1: KeypointName.LEFT_EYE,
+    2: KeypointName.RIGHT_EYE,
+    3: KeypointName.LEFT_EAR,
+    4: KeypointName.RIGHT_EAR,
     5: KeypointName.LEFT_SHOULDER,
     6: KeypointName.RIGHT_SHOULDER,
     7: KeypointName.LEFT_ELBOW,
@@ -79,11 +85,13 @@ class YoloV8PoseBackend(PoseBackend):
                 continue
             xs = [k.x for k in canonical.values()]
             ys = [k.y for k in canonical.values()]
+            bbox = BBox(x_min=min(xs), y_min=min(ys), x_max=max(xs), y_max=max(ys))
             detections.append(
                 PersonDetection(
                     pose=Pose(keypoints=canonical),
-                    bbox=BBox(x_min=min(xs), y_min=min(ys), x_max=max(xs), y_max=max(ys)),
+                    bbox=bbox,
                     score=float(box_scores[person]),
+                    appearance=appearance.histogram(frame.image, bbox),
                 )
             )
         return detections

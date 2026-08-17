@@ -20,6 +20,11 @@ class WebcamSource(CameraSource):
         height: int,
         camera_id: str = "cam0",
     ) -> None:
+        if width <= 0 or height <= 0:
+            # Caught here, at construction, rather than left to surface as an
+            # opaque cv2.error deep in the frame loop the first time a
+            # captured frame needs downscaling to a zero/negative size.
+            raise ValueError(f"capture width/height must be positive, got {width}x{height}")
         self._cap = cv2.VideoCapture(index)
         if not self._cap.isOpened():
             raise RuntimeError(f"cannot open webcam index {index}")

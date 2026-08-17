@@ -38,6 +38,7 @@ from combat_vision.engines.base import MetricsEngine
 from combat_vision.events.bus import EventBus
 from combat_vision.events.types import (
     FighterId,
+    FighterRelabeledEvent,
     KeypointName,
     Limb,
     Pose,
@@ -98,6 +99,21 @@ class StrikeClassifierEngine(MetricsEngine):
         self._stances: dict[FighterId, Stance] = {}
         bus.subscribe(SpeedPeakEvent, self._on_candidate)
         bus.subscribe(StanceSample, self._on_stance)
+        bus.subscribe(FighterRelabeledEvent, self._on_relabeled)
+
+    def _on_relabeled(self, event: FighterRelabeledEvent) -> None:
+        """Drop buffered poses and stance for a label now held by a different person.
+
+        Buffered poses are keyed by frame timestamp, not by who's wearing
+        the label — without clearing this, a strike thrown moments after
+        the relabel would window over a mix of the departed fighter's
+        tail-end poses and the new fighter's poses. The remembered stance
+        must go too: ``_lead_side`` uses it to decide jab vs. cross, and a
+        stale stance would mislabel the new fighter's hand strikes until
+        their own first :class:`StanceSample` arrives.
+        """
+        self._buffers.pop(event.fighter_id, None)
+        self._stances.pop(event.fighter_id, None)
 
     def process(self, tracked: TrackedPose) -> None:
         """Buffer poses so stroke windows are available when candidates fire."""
@@ -158,6 +174,12 @@ class StrikeClassifierEngine(MetricsEngine):
         elbow_angle = self._joint_angle(
             extension_pose, shoulder_name, elbow_name, wrist_name
         )
+        if elbow_angle is None:
+            # Elbow/shoulder never both visible at the extension frame — no
+            # reliable geometry to classify from. Missing data must not be
+            # read as "arm was straight" (which is what a 180° default would
+            # imply and confidently misclassify as a jab/cross).
+            return StrikeType.UNKNOWN, 0.0
 
         dx = path[-1][0] - path[0][0]
         dy = path[-1][1] - path[0][1]
@@ -295,11 +317,11 @@ class StrikeClassifierEngine(MetricsEngine):
 
     def _joint_angle(
         self, pose: Pose, a: KeypointName, vertex: KeypointName, b: KeypointName
-    ) -> float:
-        """Angle at ``vertex`` in degrees; 180 when keypoints are missing."""
+    ) -> float | None:
+        """Angle at ``vertex`` in degrees, or None if any keypoint is missing."""
         pa, pv, pb = pose.get(a), pose.get(vertex), pose.get(b)
         if pa is None or pv is None or pb is None:
-            return 180.0
+            return None
         return geometry.angle_at(
             self._calibration.to_pixels(pv.x, pv.y),
             self._calibration.to_pixels(pa.x, pa.y),

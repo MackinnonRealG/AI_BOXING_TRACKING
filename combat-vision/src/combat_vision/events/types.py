@@ -29,6 +29,10 @@ class KeypointName(StrEnum):
     """
 
     NOSE = "nose"
+    LEFT_EYE = "left_eye"
+    RIGHT_EYE = "right_eye"
+    LEFT_EAR = "left_ear"
+    RIGHT_EAR = "right_ear"
     LEFT_SHOULDER = "left_shoulder"
     RIGHT_SHOULDER = "right_shoulder"
     LEFT_ELBOW = "left_elbow"
@@ -48,6 +52,10 @@ class KeypointName(StrEnum):
 
 
 SKELETON_EDGES: tuple[tuple[KeypointName, KeypointName], ...] = (
+    (KeypointName.NOSE, KeypointName.LEFT_EYE),
+    (KeypointName.NOSE, KeypointName.RIGHT_EYE),
+    (KeypointName.LEFT_EYE, KeypointName.LEFT_EAR),
+    (KeypointName.RIGHT_EYE, KeypointName.RIGHT_EAR),
     (KeypointName.LEFT_SHOULDER, KeypointName.RIGHT_SHOULDER),
     (KeypointName.LEFT_SHOULDER, KeypointName.LEFT_ELBOW),
     (KeypointName.LEFT_ELBOW, KeypointName.LEFT_WRIST),
@@ -121,6 +129,11 @@ class PersonDetection:
     bbox: BBox
     score: float
     """Overall detection confidence, 0..1."""
+    appearance: tuple[float, ...] | None = None
+    """Visual descriptor of the bbox crop (see :mod:`pose.appearance`), used
+    by trackers to re-identify a fighter by appearance after a long
+    occlusion instead of guessing from track order alone. None if the
+    backend didn't compute one (e.g. the crop was too small to sample)."""
 
 
 @dataclass(frozen=True, slots=True)
@@ -269,11 +282,172 @@ class StanceSwitchEvent(Event):
 
 
 @dataclass(frozen=True, slots=True)
+class CleanTechniqueEvent(Event):
+    """A strike that passed a technique check cleanly — the positive
+    counterpart to :class:`RotationFaultEvent`, :class:`LegDriveFaultEvent`,
+    and :class:`BalanceFaultEvent`.
+
+    ``check`` identifies which check passed: ``"hip_rotation"`` (from
+    :mod:`engines.rotation`), ``"leg_drive"`` (from :mod:`engines.knee_bend`),
+    or ``"base_balance"`` (from :mod:`engines.kick_balance`). ``limb`` is
+    whichever limb threw the strike — a hand for the first two, a kicking
+    foot or knee for the third. Only published when the check was actually
+    evaluable — see the matching fault event's docstring for the gating
+    that applies to both the good and bad outcome alike (e.g. a jab's low
+    shoulder rotation is never judged either way).
+    """
+
+    check: str
+    limb: Limb
+
+
+@dataclass(frozen=True, slots=True)
+class RotationFaultEvent(Event):
+    """A hand strike whose shoulders turned but whose hips didn't follow.
+
+    Only published for strokes where the shoulders rotated enough for the
+    comparison to mean anything — a jab's naturally low rotation is not
+    treated as a fault. Reads shoulder/hip *line angle* in the image plane,
+    like :class:`PowerEstimateEvent`'s rotation component; a fighter facing
+    the camera square-on reads as less rotation than they actually produced.
+    """
+
+    limb: Limb
+    shoulder_rotation_deg: float
+    hip_rotation_deg: float
+
+
+@dataclass(frozen=True, slots=True)
+class DepthPostureSample(Event):
+    """Approximate, unitless depth-based posture reading.
+
+    Built from MediaPipe's ``z`` landmark coordinate — a rough, uncalibrated,
+    single-view depth estimate, noisier and less trustworthy than the (x, y)
+    geometry every other engine relies on. Positive ``*_elbow_flare`` means
+    that elbow sits closer to the camera than the shoulder/hip reference
+    (pushed forward, out of the guard); positive ``torso_lean`` means the
+    shoulders sit closer to the camera than the hips (leaning forward into
+    range). Any field is None when the needed keypoints (including z)
+    weren't available. Treat these as directional hints, not verified
+    biomechanics — this is explicitly *not* published as a fault.
+    """
+
+    left_elbow_flare: float | None
+    right_elbow_flare: float | None
+    torso_lean: float | None
+
+
+@dataclass(frozen=True, slots=True)
+class HeadPostureSample(Event):
+    """Periodic head-roll and head-movement measurement — no verdict attached.
+
+    ``tilt_deg`` is the *unsigned* angular gap between the eye line and the
+    shoulder line: 0 means the head is level with the shoulders, larger
+    means more tilt. ``lateral_movement`` is the nose's horizontal range
+    over the trailing sampling window, normalized by shoulder width (so it
+    isn't distorted by distance from the camera); None until enough samples
+    have accumulated. Neither is published as a fault: a still head could be
+    poor habit or a deliberate guard-up moment, and side-to-side movement is
+    good defensive technique, not a mistake — there's no reliable way from a
+    single 2D camera to tell those apart without more context than this
+    engine has. v1 only exposes the raw measurements for a fighter or coach
+    to interpret themselves, or for a future engine with combo/exchange
+    context to judge.
+    """
+
+    tilt_deg: float
+    lateral_movement: float | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class KneeBendStateEvent(Event):
+    """Debounced continuous knee posture: both knees locked-straight or bent.
+
+    ``locked`` is True only when *both* knees are near-straight — a stronger,
+    less occlusion/false-positive-prone signal than judging either leg alone.
+    """
+
+    locked: bool
+
+
+@dataclass(frozen=True, slots=True)
+class LegDriveFaultEvent(Event):
+    """A hand strike thrown with both knees already locked at the stroke's start.
+
+    ``knee_angle_deg`` is the more bent (smaller) of the two knee angles, in
+    degrees — 180° is fully locked, so even this one was already near-straight.
+    """
+
+    limb: Limb
+    knee_angle_deg: float
+
+
+@dataclass(frozen=True, slots=True)
+class BalanceFaultEvent(Event):
+    """A kick or knee strike thrown with excessive base-leg lateral wobble.
+
+    ``limb`` is the striking limb (the kicking leg/knee), not the *base*
+    leg that actually moved — matches the convention every other fault
+    event uses of keying to the limb that threw the strike.
+    ``wobble_ratio`` is the base ankle's horizontal range of motion during
+    the stroke, divided by hip width at the stroke's start (scale-invariant
+    against distance from the camera, the same normalization
+    :mod:`engines.elbow` uses for elbow flare) — larger means more wobble.
+    """
+
+    limb: Limb
+    wobble_ratio: float
+
+
+@dataclass(frozen=True, slots=True)
+class ElbowStateEvent(Event):
+    """Debounced continuous elbow-tuck state for one arm.
+
+    ``elbow`` is expressed via the hand limbs (``LEFT_HAND``/``RIGHT_HAND``)
+    — the same convention :class:`GuardStateEvent` uses for ``hand`` —
+    since this tracks the elbow belonging to that arm, not a leg limb.
+    ``tucked`` is False when that elbow sits flared out from the torso
+    centerline beyond the configured ratio of shoulder width.
+    """
+
+    elbow: Limb
+    tucked: bool
+
+
+@dataclass(frozen=True, slots=True)
+class GuardStateEvent(Event):
+    """One hand's guard-up/guard-down state, published on debounced change.
+
+    ``guard_up`` reflects height only (hand at or above chin level, within
+    tolerance) — a hand held wide at head height still reads as "up" in v1.
+    """
+
+    hand: Limb
+    guard_up: bool
+
+
+@dataclass(frozen=True, slots=True)
 class ComboEvent(Event):
     """A sequence of strikes chained within the combination time window."""
 
     sequence: tuple[StrikeType, ...]
     strike_timestamps: tuple[float, ...] = field(default=())
+
+
+@dataclass(frozen=True, slots=True)
+class FighterRelabeledEvent(Event):
+    """``fighter_id`` now refers to a *different* physical person.
+
+    Published by the pipeline when a tracker reports a recycled label (see
+    :meth:`~combat_vision.tracking.base.Tracker.consume_relabeled`). Any sink
+    holding per-label state that assumes one continuous person — accumulated
+    counts, filters, heat maps — must drop that state on receipt, or it will
+    attribute the departed fighter's history to whoever now holds the label.
+
+    Broadcast on the bus rather than polled: ``consume_relabeled`` clears on
+    read, so exactly one caller can drain it. The pipeline is that caller and
+    fans the result out to everyone else.
+    """
 
 
 @dataclass(frozen=True, slots=True)
