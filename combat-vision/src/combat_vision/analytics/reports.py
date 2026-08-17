@@ -12,10 +12,12 @@ from collections.abc import Sequence
 from dataclasses import asdict, dataclass, field
 
 from combat_vision.events.types import (
+    BalanceFaultEvent,
     CleanTechniqueEvent,
     ComboEvent,
     DepthPostureSample,
     DistanceSample,
+    ElbowStateEvent,
     Event,
     GuardStateEvent,
     HeadPostureSample,
@@ -49,12 +51,16 @@ class FighterSummary:
     stance_switches: int
     top_combinations: list[tuple[str, int]]
     guard_drops: int
+    elbow_flares: int
     rotation_faults: int
     leg_drive_faults: int
     locked_knee_events: int
+    balance_faults: int
     clean_hip_turns: int
     clean_leg_drives: int
+    clean_base_balance: int
     avg_head_tilt_deg: float | None
+    avg_head_lateral_movement: float | None
     avg_torso_lean: float | None
 
 
@@ -102,11 +108,20 @@ class SessionReport:
             lines.append(f"  Steps: {f.steps}   Stance switches: {f.stance_switches}")
             for sequence, count in f.top_combinations:
                 lines.append(f"  Combo {sequence} ×{count}")
-            if f.guard_drops or f.rotation_faults or f.leg_drive_faults or f.locked_knee_events:
+            if (
+                f.guard_drops
+                or f.elbow_flares
+                or f.rotation_faults
+                or f.leg_drive_faults
+                or f.locked_knee_events
+                or f.balance_faults
+            ):
                 lines.append(
                     f"  Technique faults: guard dropped ×{f.guard_drops}, "
-                    f"no hip turn ×{f.rotation_faults}, no leg drive ×{f.leg_drive_faults}, "
-                    f"locked-knee stretches ×{f.locked_knee_events}"
+                    f"elbow flared ×{f.elbow_flares}, no hip turn ×{f.rotation_faults}, "
+                    f"no leg drive ×{f.leg_drive_faults}, "
+                    f"locked-knee stretches ×{f.locked_knee_events}, "
+                    f"base wobbled ×{f.balance_faults}"
                 )
             hip_judged = f.clean_hip_turns + f.rotation_faults
             if hip_judged:
@@ -120,8 +135,20 @@ class SessionReport:
                     f"  Leg drive: {f.clean_leg_drives} clean / {f.leg_drive_faults} no-drive "
                     f"({f.clean_leg_drives / leg_judged:.0%} clean)"
                 )
+            balance_judged = f.clean_base_balance + f.balance_faults
+            if balance_judged:
+                lines.append(
+                    f"  Kick/knee base balance: {f.clean_base_balance} clean / "
+                    f"{f.balance_faults} wobbled "
+                    f"({f.clean_base_balance / balance_judged:.0%} clean)"
+                )
             if f.avg_head_tilt_deg is not None:
                 lines.append(f"  Avg head tilt: {f.avg_head_tilt_deg:.0f}° (approximate)")
+            if f.avg_head_lateral_movement is not None:
+                lines.append(
+                    f"  Avg head movement: {f.avg_head_lateral_movement:.2f}x shoulder width "
+                    "(higher = more head movement; not judged as good or bad)"
+                )
             if f.avg_torso_lean is not None:
                 direction = "forward" if f.avg_torso_lean > 0 else "back"
                 lines.append(
@@ -194,13 +221,21 @@ def _summarize(
     )
 
     guard_drops = sum(1 for e in mine if isinstance(e, GuardStateEvent) and not e.guard_up)
+    elbow_flares = sum(1 for e in mine if isinstance(e, ElbowStateEvent) and not e.tucked)
     rotation_faults = sum(1 for e in mine if isinstance(e, RotationFaultEvent))
     leg_drive_faults = sum(1 for e in mine if isinstance(e, LegDriveFaultEvent))
     locked_knee_events = sum(1 for e in mine if isinstance(e, KneeBendStateEvent) and e.locked)
+    balance_faults = sum(1 for e in mine if isinstance(e, BalanceFaultEvent))
     clean = [e for e in mine if isinstance(e, CleanTechniqueEvent)]
     clean_hip_turns = sum(1 for e in clean if e.check == "hip_rotation")
     clean_leg_drives = sum(1 for e in clean if e.check == "leg_drive")
+    clean_base_balance = sum(1 for e in clean if e.check == "base_balance")
     head_tilts = [e.tilt_deg for e in mine if isinstance(e, HeadPostureSample)]
+    head_movements = [
+        e.lateral_movement
+        for e in mine
+        if isinstance(e, HeadPostureSample) and e.lateral_movement is not None
+    ]
     torso_leans = [
         e.torso_lean
         for e in mine
@@ -223,12 +258,16 @@ def _summarize(
         stance_switches=len(switches),
         top_combinations=combo_counter.most_common(3),
         guard_drops=guard_drops,
+        elbow_flares=elbow_flares,
         rotation_faults=rotation_faults,
         leg_drive_faults=leg_drive_faults,
         locked_knee_events=locked_knee_events,
+        balance_faults=balance_faults,
         clean_hip_turns=clean_hip_turns,
         clean_leg_drives=clean_leg_drives,
+        clean_base_balance=clean_base_balance,
         avg_head_tilt_deg=statistics.fmean(head_tilts) if head_tilts else None,
+        avg_head_lateral_movement=statistics.fmean(head_movements) if head_movements else None,
         avg_torso_lean=statistics.fmean(torso_leans) if torso_leans else None,
     )
 
@@ -264,6 +303,11 @@ def _coaching_notes(summaries: Sequence[FighterSummary], duration_s: float) -> l
                 f"{who}: guard dropped {f.guard_drops} times this session — "
                 "make resetting your hands after every exchange automatic."
             )
+        if f.elbow_flares / minutes > 3:
+            notes.append(
+                f"{who}: elbows flared out {f.elbow_flares} times this session — "
+                "keep them tucked to your ribs to protect the body."
+            )
         hip_judged = f.clean_hip_turns + f.rotation_faults
         if hip_judged and f.rotation_faults / hip_judged > 0.25:
             notes.append(
@@ -275,5 +319,11 @@ def _coaching_notes(summaries: Sequence[FighterSummary], duration_s: float) -> l
             notes.append(
                 f"{who}: {f.leg_drive_faults} of {leg_judged} judged punches were thrown "
                 "with locked knees — stay bent so you can push off the floor."
+            )
+        balance_judged = f.clean_base_balance + f.balance_faults
+        if balance_judged and f.balance_faults / balance_judged > 0.25:
+            notes.append(
+                f"{who}: {f.balance_faults} of {balance_judged} judged kicks/knees had a "
+                "wobbly base leg — work stance drills to stay grounded through the kick."
             )
     return notes

@@ -176,6 +176,42 @@ def test_toggle_relabels_are_reported_once() -> None:
     assert switchable.consume_relabeled() == frozenset()
 
 
+def test_recycling_prefers_the_appearance_match_when_both_slots_are_eligible() -> None:
+    """When two labels are simultaneously eligible for recycling, motion order
+    alone is a coin flip about who is who — appearance must break the tie.
+
+    Exercises ``_label_for`` directly for full determinism: routing this
+    through ByteTrack would make which track id appears "first" in a given
+    frame an implementation detail out of the test's control.
+    """
+    tracker = _make_supervision_tracker()  # max_missed_frames=15
+    red = (1.0, 0.0, 0.0)
+    blue = (0.0, 1.0, 0.0)
+
+    assert tracker._label_for(1, red) == "A"
+    assert tracker._label_for(2, blue) == "B"
+
+    # Both fighters vanish for longer than max_missed_frames -- both slots
+    # become eligible for recycling.
+    tracker._frame_index += 20
+
+    # New track ids reappear in slot order (blue first) -- a naive "first
+    # eligible slot" recycle would wrongly hand blue to A (originally red).
+    assert tracker._label_for(3, blue) == "B"
+    assert tracker._label_for(4, red) == "A"
+
+
+def test_recycling_falls_back_to_slot_order_without_appearance_data() -> None:
+    """No descriptors on either side -- same behavior as before this feature."""
+    tracker = _make_supervision_tracker()
+    assert tracker._label_for(1, None) == "A"
+    assert tracker._label_for(2, None) == "B"
+
+    tracker._frame_index += 20
+
+    assert tracker._label_for(3, None) == "A"  # first eligible slot, as before
+
+
 def test_no_toggle_means_no_relabel() -> None:
     """Steady tracking through the wrapper reports nothing, as before."""
     switchable = _make_switchable()

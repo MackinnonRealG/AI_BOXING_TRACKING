@@ -10,6 +10,8 @@ import time
 
 from combat_vision.events.bus import EventBus
 from combat_vision.events.types import (
+    BalanceFaultEvent,
+    ElbowStateEvent,
     FighterRelabeledEvent,
     GuardStateEvent,
     Keypoint,
@@ -26,6 +28,7 @@ from combat_vision.events.types import (
     StrikeType,
     TrackedPose,
 )
+from combat_vision.sports.switchable import SwitchableSportProfile
 from combat_vision.ui.overlay import LiveOverlay
 from combat_vision.utils.config import UiConfig
 
@@ -106,6 +109,41 @@ def test_guard_up_produces_no_guidance() -> None:
     assert overlay._guidance([_visible_pose("A")]) is None
 
 
+def test_elbow_flare_appears_in_guidance() -> None:
+    """A flagged elbow flare surfaces as an on-screen coaching cue."""
+    overlay, bus = _overlay()
+    bus.publish(
+        ElbowStateEvent(timestamp_s=1.0, fighter_id="A", elbow=Limb.RIGHT_HAND, tucked=False)
+    )
+    message = overlay._guidance([_visible_pose("A")])
+    assert message is not None
+    assert "right hand" in message.lower()
+    assert "elbow" in message.lower()
+
+
+def test_elbow_tucked_produces_no_guidance() -> None:
+    """An arm reported elbow-tucked must not trigger the flare cue."""
+    overlay, bus = _overlay()
+    bus.publish(
+        ElbowStateEvent(timestamp_s=1.0, fighter_id="A", elbow=Limb.RIGHT_HAND, tucked=True)
+    )
+    assert overlay._guidance([_visible_pose("A")]) is None
+
+
+def test_guard_drop_takes_priority_over_elbow_flare() -> None:
+    """Guard drop is checked first — a dropped hand is the more urgent cue."""
+    overlay, bus = _overlay()
+    bus.publish(
+        ElbowStateEvent(timestamp_s=1.0, fighter_id="A", elbow=Limb.RIGHT_HAND, tucked=False)
+    )
+    bus.publish(
+        GuardStateEvent(timestamp_s=1.0, fighter_id="A", hand=Limb.LEFT_HAND, guard_up=False)
+    )
+    message = overlay._guidance([_visible_pose("A")])
+    assert message is not None
+    assert "dropping" in message.lower()
+
+
 def test_rotation_fault_appears_in_guidance_and_expires() -> None:
     """A fresh rotation fault surfaces as a cue, then clears after it expires."""
     overlay, bus = _overlay()
@@ -159,6 +197,19 @@ def test_relabel_clears_guard_state() -> None:
     bus.publish(FighterRelabeledEvent(timestamp_s=2.0, fighter_id="A"))
 
     assert overlay._fighters["A"].guard_up == {}
+
+
+def test_relabel_clears_elbow_state() -> None:
+    """Elbow-tuck state is per-arm HUD state and must not survive a relabel either."""
+    overlay, bus = _overlay()
+    bus.publish(
+        ElbowStateEvent(timestamp_s=1.0, fighter_id="A", elbow=Limb.RIGHT_HAND, tucked=False)
+    )
+    assert overlay._fighters["A"].elbow_tucked[Limb.RIGHT_HAND] is False
+
+    bus.publish(FighterRelabeledEvent(timestamp_s=2.0, fighter_id="A"))
+
+    assert overlay._fighters["A"].elbow_tucked == {}
 
 
 def test_relabel_clears_rotation_fault_state() -> None:
@@ -215,10 +266,23 @@ def test_leg_drive_fault_appears_in_guidance() -> None:
     assert "leg drive" in message.lower()
 
 
+def test_balance_fault_appears_in_guidance() -> None:
+    """A wobbly-base kick surfaces the same way a leg-drive fault does."""
+    overlay, bus = _overlay()
+    bus.publish(
+        BalanceFaultEvent(timestamp_s=1.0, fighter_id="A", limb=Limb.LEFT_FOOT, wobble_ratio=0.8)
+    )
+    message = overlay._guidance([_visible_pose("A")])
+    assert message is not None
+    assert "wobbled" in message.lower()
+
+
 def test_toggle_drill_starts_and_stops_via_the_d_key() -> None:
     """The 'd' key starts the next drill in rotation, then stops it on a second press."""
     bus = EventBus()
-    overlay = LiveOverlay(bus=bus, config=UiConfig(), sport="boxing")
+    overlay = LiveOverlay(
+        bus=bus, config=UiConfig(), sport_profile=SwitchableSportProfile("boxing")
+    )
     assert not overlay._drill_coach.active
 
     overlay._toggle_drill()
@@ -229,10 +293,66 @@ def test_toggle_drill_starts_and_stops_via_the_d_key() -> None:
     assert not overlay._drill_coach.active
 
 
+def test_toggle_sport_flips_between_boxing_and_kickboxing() -> None:
+    """The 's' key flips the shared profile so every engine sees the new
+    sport immediately — this overlay just reads .name back afterward."""
+    bus = EventBus()
+    profile = SwitchableSportProfile("boxing")
+    overlay = LiveOverlay(bus=bus, config=UiConfig(), sport_profile=profile)
+
+    overlay._toggle_sport()
+    assert profile.name == "kickboxing"
+
+    overlay._toggle_sport()
+    assert profile.name == "boxing"
+
+
+def test_toggle_sport_refreshes_the_drill_list() -> None:
+    """The drill list is recomputed for whichever sport is now active.
+
+    (The built-in drills all happen to be hand-only, so boxing's and
+    kickboxing's lists are currently identical in content -- this test
+    checks the list is *recomputed against the new profile*, not that its
+    contents differ, which drills_for_profile's own tests already cover.)
+    """
+    from combat_vision.drills import drills_for_profile
+
+    bus = EventBus()
+    profile = SwitchableSportProfile("boxing")
+    overlay = LiveOverlay(bus=bus, config=UiConfig(), sport_profile=profile)
+
+    overlay._toggle_sport()
+
+    assert overlay._drills == drills_for_profile(profile)
+
+
+def test_toggle_sport_stops_a_running_drill() -> None:
+    """A drill built from the old sport's combo list is stopped, not left
+    running against a profile that may no longer support its strikes."""
+    bus = EventBus()
+    profile = SwitchableSportProfile("boxing")
+    overlay = LiveOverlay(bus=bus, config=UiConfig(), sport_profile=profile)
+    overlay._toggle_drill()
+    assert overlay._drill_coach.active
+
+    overlay._toggle_sport()
+
+    assert not overlay._drill_coach.active
+
+
+def test_s_key_does_nothing_without_a_sport_profile() -> None:
+    """Overlays built without a sport (e.g. most other tests in this file)
+    must not crash on 's' -- there's nothing to toggle."""
+    overlay, _bus = _overlay()
+    assert overlay._handle_key(ord("s"), frame_width=100) is True
+
+
 def test_toggle_drill_targets_the_lone_fighter_in_frame() -> None:
     """Solo training as fighter B must not silently start a drill for 'A'."""
     bus = EventBus()
-    overlay = LiveOverlay(bus=bus, config=UiConfig(), sport="boxing")
+    overlay = LiveOverlay(
+        bus=bus, config=UiConfig(), sport_profile=SwitchableSportProfile("boxing")
+    )
     overlay._now_s = 5.0
     overlay._fighters["B"].last_seen_s = 5.0  # only B is currently in frame
 
@@ -243,7 +363,9 @@ def test_toggle_drill_targets_the_lone_fighter_in_frame() -> None:
 
 def test_toggle_drill_defaults_to_a_when_both_fighters_are_in_frame() -> None:
     bus = EventBus()
-    overlay = LiveOverlay(bus=bus, config=UiConfig(), sport="boxing")
+    overlay = LiveOverlay(
+        bus=bus, config=UiConfig(), sport_profile=SwitchableSportProfile("boxing")
+    )
     overlay._now_s = 5.0
     overlay._fighters["A"].last_seen_s = 5.0
     overlay._fighters["B"].last_seen_s = 5.0
@@ -256,7 +378,9 @@ def test_toggle_drill_defaults_to_a_when_both_fighters_are_in_frame() -> None:
 def test_drill_prompt_appears_in_guidance() -> None:
     """A running drill's prompt takes priority in the guidance line."""
     bus = EventBus()
-    overlay = LiveOverlay(bus=bus, config=UiConfig(), sport="boxing")
+    overlay = LiveOverlay(
+        bus=bus, config=UiConfig(), sport_profile=SwitchableSportProfile("boxing")
+    )
     overlay._toggle_drill()
     message = overlay._guidance([_visible_pose("A")])
     assert message is not None

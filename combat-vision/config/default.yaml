@@ -73,6 +73,10 @@ engines:
     drop_margin_ratio: 0.25        # tolerance below the chin line still read as "up"
     drop_debounce_s: 0.6           # hand must be below the line this long before flagging
     recover_debounce_s: 0.15       # hand must be above the line this long before clearing
+  elbow:
+    flare_ratio: 1.7                 # elbow offset / half shoulder width above which = flared
+    flare_debounce_s: 0.6            # elbow must be flared this long before flagging
+    tuck_debounce_s: 0.15            # elbow must be tucked this long before clearing
   rotation:
     min_shoulder_rotation_deg: 15.0  # below this, shoulder turn is too small to judge
     min_hip_ratio: 0.5               # hip rotation below this fraction of shoulder = fault
@@ -80,8 +84,11 @@ engines:
     locked_angle_deg: 165.0          # knee angle at/above this counts as "locked"
     lock_debounce_s: 1.0             # both knees must stay locked this long to flag posture
     bend_debounce_s: 0.15            # recovery debounce, mirrors the guard engine's pattern
+  kick_balance:
+    wobble_ratio: 0.5                # base ankle horizontal range / hip width, above which = wobble
   head_posture:
     sample_interval_s: 0.2           # HeadPostureSample decimation, mirrors footwork
+    movement_window_s: 2.0           # trailing window over which lateral movement is measured
   depth_posture:
     sample_interval_s: 0.2           # DepthPostureSample decimation, mirrors footwork
   distance:

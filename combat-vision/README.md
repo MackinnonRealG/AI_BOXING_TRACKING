@@ -24,6 +24,8 @@ The MediaPipe pose model (`pose_landmarker_lite.task`, ~5 MB) is downloaded auto
 # Live mode: webcam + real-time overlay
 # keys: q quits, h toggles the foot heat map, t toggles the tracker backend
 # (supervision/ByteTrack <-> built-in centroid; also settable via tracking.backend in config)
+# s flips between boxing and kickboxing live -- every engine picks up which
+#   strikes/faults it should monitor immediately, no restart needed
 # d starts/stops a guided drill for fighter A, cycling through built-in combos
 combat-vision live --sport boxing --camera 0
 combat-vision live --sport kickboxing --rtsp rtsp://192.168.1.20/stream
@@ -38,6 +40,11 @@ Every tunable (thresholds, smoothing, camera, calibration) lives in `config/defa
 # Quality gates
 .venv/bin/pytest && .venv/bin/ruff check . && .venv/bin/mypy
 ```
+
+Everything above is verified against synthetic pose fixtures only — this has
+never been run against a real camera in development. Before trusting any of
+it, see [`docs/first_real_test.md`](docs/first_real_test.md) for a short,
+structured first session and what to check in the results.
 
 ## Architecture
 
@@ -62,9 +69,9 @@ Design rules that keep the system extensible:
 |---|---|---|
 | `capture/` | ✅ | `CameraSource` interface; webcam, video file, RTSP; multi-camera-ready frames |
 | `pose/` | ✅ mediapipe / ✅ yolov8 (optional extra) | Pose backends behind one interface; YOLOv8 needs `pip install "combat-vision[yolo]"` |
-| `tracking/` | ✅ | ByteTrack (supervision) by default with live-toggleable centroid fallback; stable A/B identities through occlusion |
+| `tracking/` | ✅ | ByteTrack (supervision) by default with live-toggleable centroid fallback; stable A/B identities through occlusion; appearance-based re-ID (color-histogram descriptor) disambiguates which label to recycle onto a reappearing fighter after a long occlusion — supervision tracker only, see Roadmap |
 | `filtering/` | ✅ | One-Euro filter per keypoint (speed-adaptive smoothing) |
-| `sports/` | ✅ | Boxing + kickboxing profiles |
+| `sports/` | ✅ | Boxing + kickboxing profiles, hot-swappable at runtime (`SwitchableSportProfile`, live `s` key) |
 | `engines/speed` | ✅ tested | Limb velocity (wrists; +ankles/knees in kickboxing), hysteresis stroke detection → candidates |
 | `engines/strike_classifier` | ✅ tested | Heuristic classification: jab/cross/hook/uppercut + kicks/knees, landed detection vs opponent zones |
 | `engines/power` | ✅ tested | 0–100 *estimated* power: speed + limb extension + torso rotation |
@@ -73,8 +80,10 @@ Design rules that keep the system extensible:
 | `engines/distance` | ✅ tested | Decimated inter-fighter distance samples |
 | `engines/combination` | ✅ tested | Gap-based strike chaining → most-used sequences |
 | `engines/guard` | ✅ tested | Per-hand guard-height fault: sustained hand drop below chin line → live cue |
+| `engines/elbow` | ✅ tested | Per-arm elbow-tuck fault: elbow flared out from the torso centerline → live cue |
 | `engines/rotation` | ✅ tested | Hip-shoulder separation: shoulders turned without matching hip turn → "arm punch" fault |
 | `engines/knee_bend` | ✅ tested | Locked-knee posture + no-leg-drive punches (both knees straight at stroke start) |
+| `engines/kick_balance` | ✅ tested | Base (standing) leg lateral wobble during kicks/knees — kickboxing only |
 | `engines/head_posture` | ✅ tested | Head-roll (eye line vs shoulder line) — measurement only, not graded as a fault |
 | `engines/depth_posture` | ✅ tested | *Approximate* elbow-flare / torso-lean from MediaPipe's unused `z` channel — measurement only |
 | `calibration/` | ✅ v1 | Reference-length px→m scale; two-camera DLT triangulation math (`triangulation.py`, tested against synthetic geometry — not yet wired to live capture, see Roadmap) |
@@ -98,7 +107,7 @@ Its tests replay synthetic fixtures with known ground truth (a jab whose true pe
 ## Roadmap
 
 1. **Learned strike classifier** — replace the geometric heuristics with a small temporal model (1D-CNN over keypoint windows) trained on labelled sparring clips; today's classifier generates exactly that labelled data. **Blocked on data**: no labelled clip corpus exists yet — this needs real sparring footage run through review mode and hand-corrected before any training code is worth writing.
-2. **Two-fighter hardening (appearance-based re-ID)** — ByteTrack's motion model already handles clinches/crossings well (see `tracking/supervision_tracker.py`), but re-acquisition after a long occlusion is still motion/order-based, not appearance-based. A real fix means giving `PoseBackend.detect()` and the `Tracker` interface access to image crops (or a per-detection appearance descriptor) and re-scoring candidates by appearance on re-acquisition — a genuine interface change across `pose/`, `events/types.py`, and `tracking/`, not a one-file patch, so it's scoped as its own future change rather than bolted on here.
+2. **Two-fighter hardening (appearance-based re-ID)** — done for the default tracker: `pose/appearance.py` computes a normalized HSV hue histogram per detection, `PersonDetection.appearance` carries it, and `SupervisionTracker` prefers the closest appearance match when more than one label is simultaneously eligible for recycling (both fighters lost, then both reappear) instead of picking whichever slot comes first. This is a color histogram, not a learned embedding — it will **not** reliably distinguish two fighters in near-identical kit (same-color rash guards, etc.), and the centroid fallback tracker (`FighterTracker`) doesn't attempt recycling at all (different design, untouched). Both are known, accepted limits of this v1, not bugs.
 3. **Web UI** — replace the OpenCV window via the existing FastAPI websocket stub. A substantial separate frontend effort, not attempted here.
 4. **Pattern recognition v2** — gradient-boosted trees + SHAP once ~100 labelled rounds exist (v1 median-split mining ships now).
 5. **Multi-camera calibration/fusion** — the triangulation math (two-view DLT) is done and tested against synthetic camera geometry: see `calibration/triangulation.py`. Live fusion remains incomplete and requires physical cameras (not just code) to build and validate: per-camera intrinsic calibration from real checkerboard captures, extrinsics from shared scene references, and synchronized dual-camera capture wired into the pipeline. RTSP reconnection policy is also still open.

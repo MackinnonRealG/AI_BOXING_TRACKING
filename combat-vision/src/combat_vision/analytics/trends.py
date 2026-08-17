@@ -9,14 +9,17 @@ from combat_vision.storage.models import EventRecord
 from combat_vision.storage.repository import SessionRepository
 
 # Event types counted as a technique fault, and how to tell a fault instance
-# from a benign one within that type's stored payload. GuardStateEvent and
-# KneeBendStateEvent are continuous state events — only the "bad" direction
-# (guard down, knees locked) counts; RotationFaultEvent/LegDriveFaultEvent
-# are only ever published for the fault case, so every stored one counts.
+# from a benign one within that type's stored payload. GuardStateEvent,
+# ElbowStateEvent, and KneeBendStateEvent are continuous state events — only
+# the "bad" direction (guard down, elbow flared, knees locked) counts;
+# RotationFaultEvent/LegDriveFaultEvent/BalanceFaultEvent are only ever
+# published for the fault case, so every stored one counts.
 _FAULT_EVENT_TYPES: tuple[str, ...] = (
     "RotationFaultEvent",
     "LegDriveFaultEvent",
+    "BalanceFaultEvent",
     "GuardStateEvent",
+    "ElbowStateEvent",
     "KneeBendStateEvent",
 )
 
@@ -25,6 +28,8 @@ def _is_fault_instance(event_type: str, payload: dict) -> bool:
     """Whether one stored event of ``event_type`` represents a fault."""
     if event_type == "GuardStateEvent":
         return not payload.get("guard_up", True)
+    if event_type == "ElbowStateEvent":
+        return not payload.get("tucked", True)
     if event_type == "KneeBendStateEvent":
         return bool(payload.get("locked", False))
     return True

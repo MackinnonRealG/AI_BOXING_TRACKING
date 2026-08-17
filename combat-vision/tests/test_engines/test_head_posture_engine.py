@@ -23,17 +23,21 @@ from combat_vision.utils.config import HeadPostureConfig
 _CALIBRATION = Calibration(metres_per_pixel=0.002, frame_width_px=720, frame_height_px=720)
 
 
-def _pose(head_tilt_deg: float, missing: KeypointName | None = None) -> Pose:
+def _pose(
+    head_tilt_deg: float, nose_x: float = 0.5, missing: KeypointName | None = None
+) -> Pose:
     """Level shoulders; eyes tilted by ``head_tilt_deg`` off the shoulder line.
 
     Matches this codebase's mirrored-camera convention (see stance engine
     fixtures): the "left" keypoint of a pair sits at the larger x, "right"
     at the smaller x, for both the eye line and the shoulder line — keeping
     them consistent is what makes a 0-degree tilt actually measure as 0.
+    Shoulder width is 0.10 (0.55 - 0.45), the reference for lateral_movement.
     """
     theta = math.radians(head_tilt_deg)
     dx, dy = 0.03 * math.cos(theta), 0.03 * math.sin(theta)
     keypoints = {
+        KeypointName.NOSE: Keypoint(x=nose_x, y=0.20),
         KeypointName.LEFT_EYE: Keypoint(x=0.5 + dx, y=0.20 + dy),
         KeypointName.RIGHT_EYE: Keypoint(x=0.5 - dx, y=0.20 - dy),
         KeypointName.LEFT_SHOULDER: Keypoint(x=0.55, y=0.35),
@@ -72,6 +76,46 @@ def test_samples_are_decimated_by_interval() -> None:
     frames = [(i * 0.01, 10.0) for i in range(30)]  # 0.3s span, 10ms steps
     samples = _run(frames)
     assert len(samples) == 2  # t=0.0 and the first frame >= 0.2s later
+
+
+def test_lateral_movement_is_none_until_enough_samples_accumulate() -> None:
+    """A single frame has no range to measure yet."""
+    bus = EventBus()
+    samples: list[HeadPostureSample] = []
+    bus.subscribe(HeadPostureSample, samples.append)
+    engine = HeadPostureEngine(bus, get_profile("boxing"), _CALIBRATION, HeadPostureConfig())
+    engine.process(TrackedPose(fighter_id="A", pose=_pose(0.0), timestamp_s=0.0))
+    assert samples[0].lateral_movement is None
+
+
+def test_lateral_movement_reports_the_normalized_nose_range() -> None:
+    """Nose swinging across the full shoulder width -> lateral_movement ~= 1.0."""
+    bus = EventBus()
+    samples: list[HeadPostureSample] = []
+    bus.subscribe(HeadPostureSample, samples.append)
+    engine = HeadPostureEngine(bus, get_profile("boxing"), _CALIBRATION, HeadPostureConfig())
+
+    # Shoulder width is 0.10; nose swings from 0.45 to 0.55 -> range 0.10 -> ratio 1.0.
+    engine.process(TrackedPose(fighter_id="A", pose=_pose(0.0, nose_x=0.45), timestamp_s=0.0))
+    engine.process(TrackedPose(fighter_id="A", pose=_pose(0.0, nose_x=0.55), timestamp_s=0.3))
+
+    assert samples[-1].lateral_movement == pytest.approx(1.0)
+
+
+def test_lateral_movement_window_forgets_old_positions() -> None:
+    """A swing outside movement_window_s must not still count toward the range."""
+    bus = EventBus()
+    samples: list[HeadPostureSample] = []
+    bus.subscribe(HeadPostureSample, samples.append)
+    config = HeadPostureConfig(movement_window_s=1.0)
+    engine = HeadPostureEngine(bus, get_profile("boxing"), _CALIBRATION, config)
+
+    engine.process(TrackedPose(fighter_id="A", pose=_pose(0.0, nose_x=0.45), timestamp_s=0.0))
+    # Well past the 1.0s window -- the earlier swing to 0.45 should be forgotten.
+    engine.process(TrackedPose(fighter_id="A", pose=_pose(0.0, nose_x=0.50), timestamp_s=2.0))
+    engine.process(TrackedPose(fighter_id="A", pose=_pose(0.0, nose_x=0.50), timestamp_s=2.3))
+
+    assert samples[-1].lateral_movement == pytest.approx(0.0, abs=1e-9)
 
 
 def test_missing_eye_keypoint_produces_no_sample() -> None:

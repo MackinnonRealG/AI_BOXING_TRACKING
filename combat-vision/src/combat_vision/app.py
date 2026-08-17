@@ -127,7 +127,7 @@ def _run_live(args: argparse.Namespace, sport: str, config: object) -> None:
         )
     )
     # Build the pipeline first, then bind the HUD to its bus and calibration.
-    pipeline, bus, calibration = build_pipeline(
+    pipeline, bus, calibration, sport_profile = build_pipeline(
         source=source, sport=sport, config=config, frame_sink=None
     )
     bus.start_recording()
@@ -137,19 +137,30 @@ def _run_live(args: argparse.Namespace, sport: str, config: object) -> None:
         config.ui,
         tracker=tracker if isinstance(tracker, SwitchableTracker) else None,
         calibration=calibration,
-        sport=sport,
+        sport_profile=sport_profile,
         names=names,
     )
     pipeline.set_frame_sink(overlay.render)
-    logger.info("live mode started sport=%s — controls are shown on screen", sport)
+    logger.info(
+        "live mode started sport=%s (press 's' to toggle boxing/kickboxing) — "
+        "controls are shown on screen",
+        sport,
+    )
     duration_s = 0.0
     try:
         duration_s = pipeline.run()
     finally:
         overlay.close()
 
+    # sport_profile.name reflects whichever sport was active when the
+    # session ended, not necessarily the one it started on — the 's' key
+    # may have switched it mid-session.
     report = build_session_report(
-        sport=sport, source=source_name, duration_s=duration_s, events=bus.history, names=names
+        sport=sport_profile.name,
+        source=source_name,
+        duration_s=duration_s,
+        events=bus.history,
+        names=names,
     )
 
     if not args.no_store and bus.history:
@@ -157,7 +168,10 @@ def _run_live(args: argparse.Namespace, sport: str, config: object) -> None:
 
         repo = SessionRepository(config.storage.database_url)
         session_id = repo.create_session(
-            sport=sport, mode="live", source=source_name, calibrated=calibration.is_calibrated
+            sport=sport_profile.name,
+            mode="live",
+            source=source_name,
+            calibrated=calibration.is_calibrated,
         )
         repo.save_events(session_id, bus.history)
         for label in sorted({e.fighter_id for e in bus.history}):

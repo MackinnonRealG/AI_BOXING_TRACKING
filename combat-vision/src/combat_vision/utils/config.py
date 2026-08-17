@@ -126,6 +126,12 @@ class KneeBendConfig(BaseModel):
     bend_debounce_s: float = 0.15    # recovery debounce, mirrors guard.py's pattern
 
 
+class KickBalanceConfig(BaseModel):
+    """Base-leg balance fault thresholds for kicks/knee strikes."""
+
+    wobble_ratio: float = 0.5  # base ankle horizontal range / hip width, above which = wobble
+
+
 class DepthPostureConfig(BaseModel):
     """Approximate elbow-flare / torso-lean sampling (unitless MediaPipe z)."""
 
@@ -133,9 +139,21 @@ class DepthPostureConfig(BaseModel):
 
 
 class HeadPostureConfig(BaseModel):
-    """Head-roll measurement sampling."""
+    """Head-roll and head-movement measurement sampling."""
 
     sample_interval_s: float = 0.2  # HeadPostureSample decimation, mirrors footwork
+    movement_window_s: float = 2.0  # trailing window over which lateral movement is measured
+
+
+class ElbowConfig(BaseModel):
+    """Elbow-tuck fault detection thresholds."""
+
+    flare_ratio: float = 1.7  # elbow horizontal offset from torso centerline / half shoulder
+    # width, above which counts as flared. ~1.0-1.3 is roughly "elbow at the shoulder line"
+    # (a normal tucked guard); this default is a starting point, not calibrated against real
+    # footage — expect to tune it once you've actually recorded yourself.
+    flare_debounce_s: float = 0.6  # elbow must be flared this long before flagging
+    tuck_debounce_s: float = 0.15  # elbow must be tucked this long before clearing
 
 
 class GuardConfig(BaseModel):
@@ -170,8 +188,10 @@ class EnginesConfig(BaseModel):
     footwork: FootworkConfig = FootworkConfig()
     stance: StanceConfig = StanceConfig()
     guard: GuardConfig = GuardConfig()
+    elbow: ElbowConfig = ElbowConfig()
     rotation: RotationEngineConfig = RotationEngineConfig()
     knee_bend: KneeBendConfig = KneeBendConfig()
+    kick_balance: KickBalanceConfig = KickBalanceConfig()
     head_posture: HeadPostureConfig = HeadPostureConfig()
     depth_posture: DepthPostureConfig = DepthPostureConfig()
     distance: DistanceEngineConfig = DistanceEngineConfig()

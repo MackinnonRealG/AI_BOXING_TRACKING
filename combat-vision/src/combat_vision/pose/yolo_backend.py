@@ -16,6 +16,7 @@ from typing import Any
 
 from combat_vision.capture.base import TimestampedFrame
 from combat_vision.events.types import BBox, Keypoint, KeypointName, PersonDetection, Pose
+from combat_vision.pose import appearance
 from combat_vision.pose.base import PoseBackend
 
 # COCO keypoint index -> canonical name.
@@ -84,11 +85,13 @@ class YoloV8PoseBackend(PoseBackend):
                 continue
             xs = [k.x for k in canonical.values()]
             ys = [k.y for k in canonical.values()]
+            bbox = BBox(x_min=min(xs), y_min=min(ys), x_max=max(xs), y_max=max(ys))
             detections.append(
                 PersonDetection(
                     pose=Pose(keypoints=canonical),
-                    bbox=BBox(x_min=min(xs), y_min=min(ys), x_max=max(xs), y_max=max(ys)),
+                    bbox=bbox,
                     score=float(box_scores[person]),
+                    appearance=appearance.histogram(frame.image, bbox),
                 )
             )
         return detections

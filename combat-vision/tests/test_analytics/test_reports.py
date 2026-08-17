@@ -4,8 +4,10 @@ from __future__ import annotations
 
 from combat_vision.analytics.reports import build_session_report
 from combat_vision.events.types import (
+    BalanceFaultEvent,
     CleanTechniqueEvent,
     DepthPostureSample,
+    ElbowStateEvent,
     GuardStateEvent,
     HeadPostureSample,
     KneeBendStateEvent,
@@ -38,6 +40,8 @@ def test_fault_counts_exclude_the_benign_direction() -> None:
     events = [
         GuardStateEvent(timestamp_s=1.0, fighter_id="A", hand=Limb.LEFT_HAND, guard_up=False),
         GuardStateEvent(timestamp_s=2.0, fighter_id="A", hand=Limb.RIGHT_HAND, guard_up=True),
+        ElbowStateEvent(timestamp_s=2.5, fighter_id="A", elbow=Limb.LEFT_HAND, tucked=False),
+        ElbowStateEvent(timestamp_s=2.6, fighter_id="A", elbow=Limb.RIGHT_HAND, tucked=True),
         KneeBendStateEvent(timestamp_s=3.0, fighter_id="A", locked=True),
         KneeBendStateEvent(timestamp_s=4.0, fighter_id="A", locked=False),
         RotationFaultEvent(
@@ -50,14 +54,19 @@ def test_fault_counts_exclude_the_benign_direction() -> None:
         LegDriveFaultEvent(
             timestamp_s=6.0, fighter_id="A", limb=Limb.LEFT_HAND, knee_angle_deg=178.0
         ),
+        BalanceFaultEvent(
+            timestamp_s=7.0, fighter_id="A", limb=Limb.LEFT_FOOT, wobble_ratio=0.8
+        ),
     ]
-    report = build_session_report("boxing", "cam0", duration_s=60.0, events=events)
+    report = build_session_report("kickboxing", "cam0", duration_s=60.0, events=events)
 
     summary = report.fighters[0]
     assert summary.guard_drops == 1
+    assert summary.elbow_flares == 1
     assert summary.locked_knee_events == 1
     assert summary.rotation_faults == 1
     assert summary.leg_drive_faults == 1
+    assert summary.balance_faults == 1
 
 
 def test_clean_technique_events_are_counted_alongside_faults() -> None:
@@ -92,8 +101,12 @@ def test_clean_technique_events_are_counted_alongside_faults() -> None:
 
 def test_approximate_measurements_average_correctly_and_ignore_missing_fields() -> None:
     events = [
-        HeadPostureSample(timestamp_s=1.0, fighter_id="A", tilt_deg=10.0),
-        HeadPostureSample(timestamp_s=2.0, fighter_id="A", tilt_deg=20.0),
+        HeadPostureSample(
+            timestamp_s=1.0, fighter_id="A", tilt_deg=10.0, lateral_movement=0.5
+        ),
+        HeadPostureSample(
+            timestamp_s=2.0, fighter_id="A", tilt_deg=20.0, lateral_movement=None
+        ),  # not yet enough samples in the engine -- must not average in as 0
         DepthPostureSample(
             timestamp_s=1.0,
             fighter_id="A",
@@ -113,6 +126,7 @@ def test_approximate_measurements_average_correctly_and_ignore_missing_fields() 
 
     summary = report.fighters[0]
     assert summary.avg_head_tilt_deg == 15.0
+    assert summary.avg_head_lateral_movement == 0.5
     assert summary.avg_torso_lean == 0.2
 
 
@@ -160,6 +174,38 @@ def test_coaching_note_fires_when_guard_drops_frequently() -> None:
     ]
     report = build_session_report("boxing", "cam0", duration_s=60.0, events=events)
     assert any("guard dropped" in note for note in report.coaching_notes)
+
+
+def test_coaching_note_fires_when_elbows_flare_frequently() -> None:
+    """More than 3 elbow flares per minute should trigger the plain-language note."""
+    events = [_candidate(1.0)]
+    events += [
+        ElbowStateEvent(timestamp_s=float(i), fighter_id="A", elbow=Limb.LEFT_HAND, tucked=False)
+        for i in range(4)
+    ]
+    report = build_session_report("boxing", "cam0", duration_s=60.0, events=events)
+    assert any("elbows flared" in note for note in report.coaching_notes)
+
+
+def test_clean_base_balance_is_counted_and_coaching_note_fires_on_wobble_rate() -> None:
+    """Base-balance clean reps are logged like every other clean-technique
+    check, and a high wobble rate triggers the plain-language note."""
+    events = [
+        _candidate(1.0),  # coaching notes short-circuit for a fighter with 0 punch candidates
+        CleanTechniqueEvent(
+            timestamp_s=1.0, fighter_id="A", check="base_balance", limb=Limb.LEFT_FOOT
+        ),
+        BalanceFaultEvent(timestamp_s=2.0, fighter_id="A", limb=Limb.LEFT_FOOT, wobble_ratio=0.9),
+        BalanceFaultEvent(timestamp_s=3.0, fighter_id="A", limb=Limb.RIGHT_FOOT, wobble_ratio=0.7),
+        BalanceFaultEvent(timestamp_s=4.0, fighter_id="A", limb=Limb.LEFT_FOOT, wobble_ratio=0.6),
+    ]
+    report = build_session_report("kickboxing", "cam0", duration_s=60.0, events=events)
+
+    summary = report.fighters[0]
+    assert summary.clean_base_balance == 1
+    assert summary.balance_faults == 3
+    assert any("wobbly base leg" in note for note in report.coaching_notes)
+    assert "Kick/knee base balance: 1 clean / 3 wobbled (25% clean)" in report.to_text()
 
 
 def test_landed_strike_reporting_is_unaffected_by_new_fields() -> None:

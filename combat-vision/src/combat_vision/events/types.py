@@ -129,6 +129,11 @@ class PersonDetection:
     bbox: BBox
     score: float
     """Overall detection confidence, 0..1."""
+    appearance: tuple[float, ...] | None = None
+    """Visual descriptor of the bbox crop (see :mod:`pose.appearance`), used
+    by trackers to re-identify a fighter by appearance after a long
+    occlusion instead of guessing from track order alone. None if the
+    backend didn't compute one (e.g. the crop was too small to sample)."""
 
 
 @dataclass(frozen=True, slots=True)
@@ -278,12 +283,15 @@ class StanceSwitchEvent(Event):
 
 @dataclass(frozen=True, slots=True)
 class CleanTechniqueEvent(Event):
-    """A hand strike that passed a technique check cleanly — the positive
-    counterpart to :class:`RotationFaultEvent` / :class:`LegDriveFaultEvent`.
+    """A strike that passed a technique check cleanly — the positive
+    counterpart to :class:`RotationFaultEvent`, :class:`LegDriveFaultEvent`,
+    and :class:`BalanceFaultEvent`.
 
     ``check`` identifies which check passed: ``"hip_rotation"`` (from
-    :mod:`engines.rotation`) or ``"leg_drive"`` (from
-    :mod:`engines.knee_bend`). Only published when the check was actually
+    :mod:`engines.rotation`), ``"leg_drive"`` (from :mod:`engines.knee_bend`),
+    or ``"base_balance"`` (from :mod:`engines.kick_balance`). ``limb`` is
+    whichever limb threw the strike — a hand for the first two, a kicking
+    foot or knee for the third. Only published when the check was actually
     evaluable — see the matching fault event's docstring for the gating
     that applies to both the good and bad outcome alike (e.g. a jab's low
     shoulder rotation is never judged either way).
@@ -331,16 +339,24 @@ class DepthPostureSample(Event):
 
 @dataclass(frozen=True, slots=True)
 class HeadPostureSample(Event):
-    """Periodic head-roll measurement — how level the head is vs. the shoulders.
+    """Periodic head-roll and head-movement measurement — no verdict attached.
 
     ``tilt_deg`` is the *unsigned* angular gap between the eye line and the
     shoulder line: 0 means the head is level with the shoulders, larger
-    means more tilt. Deliberately not published as a fault: head tilt alone
-    can't distinguish sloppy head position from a deliberate slip, so v1
-    only exposes the measurement rather than judging it.
+    means more tilt. ``lateral_movement`` is the nose's horizontal range
+    over the trailing sampling window, normalized by shoulder width (so it
+    isn't distorted by distance from the camera); None until enough samples
+    have accumulated. Neither is published as a fault: a still head could be
+    poor habit or a deliberate guard-up moment, and side-to-side movement is
+    good defensive technique, not a mistake — there's no reliable way from a
+    single 2D camera to tell those apart without more context than this
+    engine has. v1 only exposes the raw measurements for a fighter or coach
+    to interpret themselves, or for a future engine with combo/exchange
+    context to judge.
     """
 
     tilt_deg: float
+    lateral_movement: float | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -364,6 +380,38 @@ class LegDriveFaultEvent(Event):
 
     limb: Limb
     knee_angle_deg: float
+
+
+@dataclass(frozen=True, slots=True)
+class BalanceFaultEvent(Event):
+    """A kick or knee strike thrown with excessive base-leg lateral wobble.
+
+    ``limb`` is the striking limb (the kicking leg/knee), not the *base*
+    leg that actually moved — matches the convention every other fault
+    event uses of keying to the limb that threw the strike.
+    ``wobble_ratio`` is the base ankle's horizontal range of motion during
+    the stroke, divided by hip width at the stroke's start (scale-invariant
+    against distance from the camera, the same normalization
+    :mod:`engines.elbow` uses for elbow flare) — larger means more wobble.
+    """
+
+    limb: Limb
+    wobble_ratio: float
+
+
+@dataclass(frozen=True, slots=True)
+class ElbowStateEvent(Event):
+    """Debounced continuous elbow-tuck state for one arm.
+
+    ``elbow`` is expressed via the hand limbs (``LEFT_HAND``/``RIGHT_HAND``)
+    — the same convention :class:`GuardStateEvent` uses for ``hand`` —
+    since this tracks the elbow belonging to that arm, not a leg limb.
+    ``tucked`` is False when that elbow sits flared out from the torso
+    centerline beyond the configured ratio of shoulder width.
+    """
+
+    elbow: Limb
+    tucked: bool
 
 
 @dataclass(frozen=True, slots=True)

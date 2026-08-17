@@ -6,6 +6,8 @@ from pathlib import Path
 
 from combat_vision.analytics.trends import compute_trends
 from combat_vision.events.types import (
+    BalanceFaultEvent,
+    ElbowStateEvent,
     GuardStateEvent,
     KneeBendStateEvent,
     Limb,
@@ -84,6 +86,8 @@ def test_technique_faults_count_only_the_bad_direction_of_state_events(
         [
             GuardStateEvent(timestamp_s=1.0, fighter_id="A", hand=Limb.LEFT_HAND, guard_up=False),
             GuardStateEvent(timestamp_s=2.0, fighter_id="A", hand=Limb.LEFT_HAND, guard_up=True),
+            ElbowStateEvent(timestamp_s=2.5, fighter_id="A", elbow=Limb.RIGHT_HAND, tucked=False),
+            ElbowStateEvent(timestamp_s=2.6, fighter_id="A", elbow=Limb.RIGHT_HAND, tucked=True),
             KneeBendStateEvent(timestamp_s=3.0, fighter_id="A", locked=True),
             KneeBendStateEvent(timestamp_s=4.0, fighter_id="A", locked=False),
             RotationFaultEvent(
@@ -92,6 +96,9 @@ def test_technique_faults_count_only_the_bad_direction_of_state_events(
                 limb=Limb.RIGHT_HAND,
                 shoulder_rotation_deg=40.0,
                 hip_rotation_deg=5.0,
+            ),
+            BalanceFaultEvent(
+                timestamp_s=5.5, fighter_id="A", limb=Limb.LEFT_FOOT, wobble_ratio=0.8
             ),
             # A different fighter's fault in the same session must not be counted.
             GuardStateEvent(timestamp_s=6.0, fighter_id="B", hand=Limb.LEFT_HAND, guard_up=False),
@@ -103,7 +110,8 @@ def test_technique_faults_count_only_the_bad_direction_of_state_events(
 
     assert len(trends.points) == 1
     point = trends.points[0]
-    # 1 guard drop + 1 locked-knee event + 1 rotation fault = 3; the guard-up,
-    # knees-bent, and other-fighter's-drop events are correctly excluded.
-    assert point.technique_faults == 3
-    assert point.faults_per_minute == 3.0
+    # 1 guard drop + 1 elbow flare + 1 locked-knee event + 1 rotation fault
+    # + 1 balance fault = 5; the guard-up, elbow-tucked, knees-bent, and
+    # other-fighter's-drop events are correctly excluded.
+    assert point.technique_faults == 5
+    assert point.faults_per_minute == 5.0
