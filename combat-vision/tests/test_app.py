@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import argparse
 
-from combat_vision.app import _resolve_camera_index
+from combat_vision.app import _parser, _resolve_camera_index
 
 
 def _args(camera: int | None) -> argparse.Namespace:
@@ -29,3 +29,15 @@ def test_missing_camera_falls_back_to_default() -> None:
 def test_explicit_nonzero_camera_is_used() -> None:
     """--camera 2 overrides the default."""
     assert _resolve_camera_index(_args(2), default_index=3) == 2
+
+
+def test_calendar_subcommand_parses_with_and_without_month() -> None:
+    parser = _parser()
+    assert parser.parse_args(["calendar"]).month is None
+    assert parser.parse_args(["calendar", "--month", "2026-08"]).month == "2026-08"
+
+
+def test_routines_subcommand_parses_with_and_without_sport_filter() -> None:
+    parser = _parser()
+    assert parser.parse_args(["routines"]).sport is None
+    assert parser.parse_args(["routines", "--sport", "kickboxing"]).sport == "kickboxing"

@@ -32,7 +32,23 @@ combat-vision live --sport kickboxing --rtsp rtsp://192.168.1.20/stream
 
 # Review mode: analyse recorded sparring into a session report
 combat-vision review sparring.mp4 --sport kickboxing --output report.json
+
+# Training calendar: every session, grouped by the day it happened
+combat-vision calendar --month 2026-08
+
+# Training routine library: every named combo, reference and self-discovered
+combat-vision routines --sport kickboxing
 ```
+
+A live session is recorded to storage from the moment the camera goes live
+(a session row is created before the first frame is processed), not only if
+it later ends cleanly — if the process crashes or is killed mid-session,
+whatever was captured up to that point is still saved rather than lost.
+Every combo you actually throw (see `engines/combination`) is matched
+against the routine library and logged with its id/name: a combo matching a
+seeded reference routine is credited to that routine, and a combo that
+isn't in the library yet is auto-named and added as a new, permanently
+id'd "discovered" routine — the library grows from what you actually throw.
 
 Every tunable (thresholds, smoothing, camera, calibration) lives in `config/default.yaml`; pass `--config my.yaml` to override. To get **metric speeds (m/s)** instead of px/s, set `calibration.reference_length_m` / `reference_length_px` from a known length in frame (e.g. the ring rope span).
 
@@ -88,9 +104,10 @@ Design rules that keep the system extensible:
 | `engines/depth_posture` | ✅ tested | *Approximate* elbow-flare / torso-lean from MediaPipe's unused `z` channel — measurement only |
 | `calibration/` | ✅ v1 | Reference-length px→m scale; two-camera DLT triangulation math (`triangulation.py`, tested against synthetic geometry — not yet wired to live capture, see Roadmap) |
 | `events/` | ✅ | Typed events + synchronous bus |
-| `storage/` | ✅ | Fighters/sessions/rounds/events schema + repository + alembic |
-| `analytics/` | ✅ tested | Session reports (incl. technique-fault counts + coaching notes), cross-session trends (incl. fault rate), per-fighter personal-best baselines, pattern recognition (median-split association mining over labelled rounds) |
-| `review/` | ✅ | Video → full pipeline → JSON + text report + persistence + personal-best notes |
+| `storage/` | ✅ | Fighters/sessions/rounds/events/**training routines**/**routine hits** schema + repository + alembic |
+| `analytics/` | ✅ tested | Session reports (incl. technique-fault counts + coaching notes), cross-session trends (incl. fault rate), per-fighter personal-best baselines, pattern recognition (median-split association mining over labelled rounds), **training calendar** (`calendar.py`, sessions grouped by day), **routine matching** (`routine_matching.py`, thrown combos → named/id'd library entries) |
+| `routines.py` | ✅ | Seeded reference library of named, numbered boxing/kickboxing combos (`combat-vision routines`) — fighters also *discover* their own routines automatically from what they actually throw |
+| `review/` | ✅ | Video → full pipeline → JSON + text report + persistence + personal-best notes + routine matching |
 | `drills.py` / `ui/drill_coach.py` | ✅ tested | Guided drill mode: built-in combo library + countdown/active/result state machine |
 | `ui/` | ✅ overlay / 🔲 web | OpenCV overlay (skeleton incl. eyes/ears, strike/power/stance/guard/knee stats, live fault cues, drill prompts, heat map); FastAPI `/stats` websocket stub |
 

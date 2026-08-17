@@ -76,6 +76,59 @@ class SessionFighter(Base):
     fighter: Mapped[Fighter] = relationship(back_populates="sessions")
 
 
+class TrainingRoutine(Base):
+    """A named, numbered strike sequence — the "routine library".
+
+    ``sequence_key`` (e.g. ``"jab-cross-hook"``) is both the human-readable
+    shorthand and the dedup/lookup key per sport, so the same combo is never
+    stored twice under two different rows. ``source`` distinguishes routines
+    seeded from real coaching references (``"reference"``) from ones the
+    system named automatically the first time a fighter actually threw that
+    exact sequence (``"discovered"``) — both get a stable id and a name.
+    """
+
+    __tablename__ = "training_routines"
+    __table_args__ = (
+        UniqueConstraint("sport", "sequence_key", name="uq_routine_sport_sequence"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    name: Mapped[str] = mapped_column(String(120))
+    sport: Mapped[str] = mapped_column(String(40))
+    sequence_key: Mapped[str] = mapped_column(String(255))
+    sequence: Mapped[list] = mapped_column(JSON)  # ordered list[str] of StrikeType values
+    source: Mapped[str] = mapped_column(String(20))  # "reference" | "discovered"
+    difficulty: Mapped[str | None] = mapped_column(String(20), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=_utcnow)
+
+    hits: Mapped[list[RoutineHit]] = relationship(back_populates="routine")
+
+
+class RoutineHit(Base):
+    """How many times one fighter threw one routine in one session.
+
+    Aggregated at save time (see :mod:`analytics.routine_matching`) rather
+    than re-derived from raw ``ComboEvent`` rows on every read — the
+    training calendar reads this table directly per day.
+    """
+
+    __tablename__ = "routine_hits"
+    __table_args__ = (
+        UniqueConstraint(
+            "session_id", "routine_id", "fighter_label", name="uq_routine_hit"
+        ),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    session_id: Mapped[int] = mapped_column(ForeignKey("sessions.id"))
+    routine_id: Mapped[int] = mapped_column(ForeignKey("training_routines.id"))
+    fighter_label: Mapped[str] = mapped_column(String(4))
+    count: Mapped[int] = mapped_column(Integer)
+
+    session: Mapped[Session] = relationship()
+    routine: Mapped[TrainingRoutine] = relationship(back_populates="hits")
+
+
 class Round(Base):
     """A round within a session.
 

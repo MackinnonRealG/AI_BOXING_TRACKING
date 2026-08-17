@@ -8,8 +8,11 @@ from pathlib import Path
 
 from combat_vision.analytics.baseline import personal_best_notes
 from combat_vision.analytics.reports import SessionReport, build_session_report
+from combat_vision.analytics.routine_matching import record_routine_occurrences
 from combat_vision.app_builder import build_pipeline
 from combat_vision.capture.video_file import VideoFileSource
+from combat_vision.events.types import ComboEvent
+from combat_vision.routines import seed_rows
 from combat_vision.storage.repository import SessionRepository
 from combat_vision.utils.config import AppConfig
 
@@ -47,6 +50,7 @@ def review_video(
     )
 
     if repo is not None:
+        repo.ensure_reference_routines(seed_rows())
         session_id = repo.create_session(
             sport=sport, mode="review", source=str(video_path), calibrated=False
         )
@@ -55,6 +59,8 @@ def review_video(
             fighter_db_id = repo.get_or_create_fighter(names.get(label, f"Fighter {label}"))
             repo.link_fighter(session_id, fighter_db_id, label)
             report.coaching_notes.extend(personal_best_notes(repo, fighter_db_id, session_id))
+        combos = [e for e in bus.history if isinstance(e, ComboEvent)]
+        record_routine_occurrences(repo, session_id, sport, combos)
         repo.finish_session(session_id, duration_s)
         logger.info("session %d persisted with %d events", session_id, len(bus.history))
 

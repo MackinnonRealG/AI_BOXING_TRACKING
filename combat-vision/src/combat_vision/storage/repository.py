@@ -15,8 +15,10 @@ from combat_vision.storage.models import (
     EventRecord,
     Fighter,
     Round,
+    RoutineHit,
     Session,
     SessionFighter,
+    TrainingRoutine,
 )
 
 
@@ -201,3 +203,122 @@ class SessionRepository:
     def orm_session(self) -> OrmSession:
         """Escape hatch for analytics queries that need raw ORM access."""
         return self._sessions()
+
+    # -- training routine library -------------------------------------
+
+    def ensure_reference_routines(
+        self, seeds: Sequence[tuple[str, str, str, list[str], str | None]]
+    ) -> None:
+        """Idempotently insert the seed reference library.
+
+        Each seed is ``(name, sport, sequence_key, sequence, difficulty)``.
+        Safe to call on every startup: routines already present (matched by
+        the ``(sport, sequence_key)`` unique constraint) are left untouched,
+        so a discovered routine's name/id is never clobbered by re-seeding.
+        """
+        with self._sessions.begin() as db:
+            existing = {
+                (r.sport, r.sequence_key)
+                for r in db.scalars(select(TrainingRoutine))
+            }
+            for name, sport, sequence_key, sequence, difficulty in seeds:
+                if (sport, sequence_key) in existing:
+                    continue
+                db.add(
+                    TrainingRoutine(
+                        name=name,
+                        sport=sport,
+                        sequence_key=sequence_key,
+                        sequence=sequence,
+                        source="reference",
+                        difficulty=difficulty,
+                    )
+                )
+
+    def find_or_create_routine(
+        self, sport: str, sequence_key: str, sequence: list[str], fallback_name: str
+    ) -> tuple[int, str, bool]:
+        """The routine id/name for ``(sport, sequence_key)``, creating it if new.
+
+        Returns ``(routine_id, name, created)`` — ``created`` is True the
+        first time this exact sequence is ever seen for this sport, so
+        callers can tell "you just discovered a new routine" from "you
+        repeated a known one" without a second query.
+        """
+        with self._sessions.begin() as db:
+            existing = db.scalar(
+                select(TrainingRoutine).where(
+                    TrainingRoutine.sport == sport,
+                    TrainingRoutine.sequence_key == sequence_key,
+                )
+            )
+            if existing is not None:
+                return existing.id, existing.name, False
+            routine = TrainingRoutine(
+                name=fallback_name,
+                sport=sport,
+                sequence_key=sequence_key,
+                sequence=sequence,
+                source="discovered",
+            )
+            db.add(routine)
+            db.flush()
+            return routine.id, routine.name, True
+
+    def record_routine_hit(
+        self, session_id: int, routine_id: int, fighter_label: str, count: int
+    ) -> None:
+        """Record (or add to) how many times a routine was thrown in a session."""
+        with self._sessions.begin() as db:
+            existing = db.scalar(
+                select(RoutineHit).where(
+                    RoutineHit.session_id == session_id,
+                    RoutineHit.routine_id == routine_id,
+                    RoutineHit.fighter_label == fighter_label,
+                )
+            )
+            if existing is not None:
+                existing.count += count
+            else:
+                db.add(
+                    RoutineHit(
+                        session_id=session_id,
+                        routine_id=routine_id,
+                        fighter_label=fighter_label,
+                        count=count,
+                    )
+                )
+
+    def list_routines(self, sport: str | None = None) -> list[TrainingRoutine]:
+        """Every routine in the library, reference and discovered alike."""
+        with self._sessions() as db:
+            query = select(TrainingRoutine).order_by(TrainingRoutine.id)
+            if sport is not None:
+                query = query.where(TrainingRoutine.sport == sport)
+            return list(db.scalars(query))
+
+    def routine_hits_for_sessions(
+        self, session_ids: Sequence[int]
+    ) -> dict[int, list[tuple[str, str, int]]]:
+        """Per session: ``(routine_name, fighter_label, count)`` for every hit.
+
+        One query covering every session, per the same N+1 concern as
+        :meth:`events_for_sessions`.
+        """
+        if not session_ids:
+            return {}
+        with self._sessions() as db:
+            rows = db.execute(
+                select(
+                    RoutineHit.session_id,
+                    TrainingRoutine.name,
+                    RoutineHit.fighter_label,
+                    RoutineHit.count,
+                )
+                .join(TrainingRoutine, RoutineHit.routine_id == TrainingRoutine.id)
+                .where(RoutineHit.session_id.in_(session_ids))
+            ).all()
+        grouped: dict[int, list[tuple[str, str, int]]] = {sid: [] for sid in session_ids}
+        for session_id, name, label, count in rows:
+            grouped[session_id].append((name, label, count))
+        return grouped

@@ -143,3 +143,97 @@ def test_rounds_for_sessions_matches_per_session_calls(tmp_path: Path) -> None:
     ]
 
     assert repo.rounds_for_sessions([]) == {}
+
+
+def test_ensure_reference_routines_is_idempotent(tmp_path: Path) -> None:
+    """Re-seeding must never duplicate rows or clobber an existing one."""
+    repo = _repo(tmp_path, "seed")
+    seeds = [("1-2", "boxing", "jab-cross", ["jab", "cross"], "beginner")]
+
+    repo.ensure_reference_routines(seeds)
+    repo.ensure_reference_routines(seeds)  # second call: no-op
+
+    routines = repo.list_routines("boxing")
+    assert len(routines) == 1
+    assert routines[0].name == "1-2"
+    assert routines[0].source == "reference"
+
+
+def test_find_or_create_routine_reuses_the_same_sequence(tmp_path: Path) -> None:
+    repo = _repo(tmp_path, "discover")
+
+    first_id, first_name, first_created = repo.find_or_create_routine(
+        sport="boxing",
+        sequence_key="jab-cross",
+        sequence=["jab", "cross"],
+        fallback_name="Jab-Cross",
+    )
+    second_id, second_name, second_created = repo.find_or_create_routine(
+        sport="boxing",
+        sequence_key="jab-cross",
+        sequence=["jab", "cross"],
+        fallback_name="Jab-Cross",
+    )
+
+    assert first_created is True
+    assert second_created is False
+    assert first_id == second_id
+    assert first_name == second_name == "Jab-Cross"
+
+    routines = repo.list_routines("boxing")
+    assert len(routines) == 1
+    assert routines[0].source == "discovered"
+
+
+def test_find_or_create_routine_keeps_sports_separate(tmp_path: Path) -> None:
+    """The same sequence in a different sport is a distinct routine."""
+    repo = _repo(tmp_path, "discover_sports")
+    boxing_id, _, _ = repo.find_or_create_routine(
+        sport="boxing",
+        sequence_key="jab-cross",
+        sequence=["jab", "cross"],
+        fallback_name="Jab-Cross",
+    )
+    kickboxing_id, _, _ = repo.find_or_create_routine(
+        sport="kickboxing",
+        sequence_key="jab-cross",
+        sequence=["jab", "cross"],
+        fallback_name="Jab-Cross",
+    )
+    assert boxing_id != kickboxing_id
+
+
+def test_record_routine_hit_accumulates_for_the_same_fighter(tmp_path: Path) -> None:
+    repo = _repo(tmp_path, "hits")
+    session_id = repo.create_session(sport="boxing", mode="review", source="a.mp4", calibrated=True)
+    routine_id, _, _ = repo.find_or_create_routine(
+        sport="boxing",
+        sequence_key="jab-cross",
+        sequence=["jab", "cross"],
+        fallback_name="Jab-Cross",
+    )
+
+    repo.record_routine_hit(session_id, routine_id, "A", 3)
+    repo.record_routine_hit(session_id, routine_id, "A", 2)  # same pairing -- adds, not replaces
+    repo.record_routine_hit(session_id, routine_id, "B", 1)  # different fighter -- separate row
+
+    hits = repo.routine_hits_for_sessions([session_id])[session_id]
+    assert ("Jab-Cross", "A", 5) in hits
+    assert ("Jab-Cross", "B", 1) in hits
+    assert len(hits) == 2
+
+
+def test_routine_hits_for_sessions_matches_per_session_calls(tmp_path: Path) -> None:
+    repo = _repo(tmp_path, "hits_batch")
+    session_id = repo.create_session(sport="boxing", mode="review", source="a.mp4", calibrated=True)
+    routine_id, _, _ = repo.find_or_create_routine(
+        sport="boxing",
+        sequence_key="jab-cross",
+        sequence=["jab", "cross"],
+        fallback_name="Jab-Cross",
+    )
+    repo.record_routine_hit(session_id, routine_id, "A", 1)
+
+    assert repo.routine_hits_for_sessions([]) == {}
+    grouped = repo.routine_hits_for_sessions([session_id])
+    assert grouped == {session_id: [("Jab-Cross", "A", 1)]}
